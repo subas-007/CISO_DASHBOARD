@@ -16,6 +16,7 @@ A full-stack, zero-trust security posture dashboard for CISOs. It brings in data
 | Edge | NGINX (unprivileged) — TLS 1.3 only, HSTS, strict CSP, mTLS to the API |
 | Packaging | Multi-stage Dockerfiles · Docker Compose with segmented networks |
 
+🚀 **Deployment guide (new system, migration, offline, load balancer):** [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)
 📘 **User manual (every page, by role):** [docs/USER_MANUAL.md](docs/USER_MANUAL.md)
 🛠 **Administration & maintenance manual (install, operate, back up, upgrade, troubleshoot):** [docs/MAINTENANCE_MANUAL.md](docs/MAINTENANCE_MANUAL.md)
 🔌 **API & integration guide (REST API reference, connector requirements, OIDC):** [docs/API_AND_INTEGRATION_GUIDE.md](docs/API_AND_INTEGRATION_GUIDE.md)

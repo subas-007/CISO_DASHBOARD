@@ -4,6 +4,7 @@
 **Assumes:** working knowledge of Linux, Docker Compose, TLS/PKI and OpenID Connect.
 
 **Related documents:**
+- [Deployment Guide](DEPLOYMENT_GUIDE.md): installing on a new system, migration, offline and load-balanced deployments
 - [User Manual](USER_MANUAL.md)
 - [API & Integration Guide](API_AND_INTEGRATION_GUIDE.md)
 - [Configuration reference](CONFIGURATION.md)
