@@ -164,10 +164,19 @@ export interface Incident {
 export interface FieldSpec {
   key: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'textarea';
+  type: 'string' | 'number' | 'boolean' | 'textarea' | 'select';
   required?: boolean;
   placeholder?: string;
   help?: string;
+  options?: { value: string | number; label: string }[];
+}
+
+export interface RequestOptions {
+  pathPrefix?: string;
+  headers?: Record<string, string>;
+  query?: Record<string, string>;
+  timeoutMs?: number;
+  maxRetries?: number;
 }
 
 export interface CatalogItem {
@@ -191,6 +200,7 @@ export interface Connector {
   pollIntervalSec: number;
   enabled: boolean;
   settings: Record<string, string | number | boolean>;
+  requestOptions?: RequestOptions;
   status: 'UNTESTED' | 'HEALTHY' | 'FAILED' | 'DISABLED';
   lastTestAt: string | null;
   lastSyncAt: string | null;
@@ -227,10 +237,52 @@ export interface ChainVerification {
   verifiedAt: string;
 }
 
+export type ApplyMode = 'live' | 'identity' | 'redeploy' | 'host';
+
+export interface SettingField {
+  path: string;
+  label: string;
+  type: 'number' | 'boolean' | 'string' | 'select' | 'list';
+  min?: number;
+  max?: number;
+  unit?: string;
+  options?: { value: string | number; label: string }[];
+  help?: string;
+  placeholder?: string;
+}
+
 export interface SettingItem {
   key: string;
   label: string;
+  description: string;
+  category: string;
+  categoryLabel: string;
+  apply: ApplyMode;
   value: unknown;
+  warnings: string[];
+  fields: SettingField[];
   permission: string;
+  readPermission: string;
   editable: boolean;
+}
+
+export interface SettingSaveResult {
+  key: string;
+  value: unknown;
+  warnings: string[];
+  applied: { mode: ApplyMode; ok: boolean; message: string };
+}
+
+export interface IdentityUser {
+  id: string;
+  username: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  enabled: boolean;
+  createdAt: string | null;
+  roles: Role[];
+  mfaConfigured: boolean;
+  requiredActions: string[];
+  lastLoginAt: string | null;
 }

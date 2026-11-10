@@ -1,7 +1,7 @@
 flowchart TB
     subgraph Pipeline["Request pipeline (app.ts)"]
         direction LR
-        H[helmet headers<br/>no-store] --> RL[rate limit] --> CSRF[CSRF guard<br/>Origin + double-submit] --> AUTHN[authenticate<br/>JWT + live session] --> RBAC[requirePermission] --> ZOD[Zod .strict schemas]
+        H[helmet headers<br/>no-store] --> RL[per-IP rate limit<br/>admin-defined] --> NET[network allowlist<br/>admin-defined] --> CSRF[CSRF guard<br/>Origin + double-submit] --> AUTHN[authenticate<br/>JWT + live session] --> URL[per-user rate limit] --> RBAC[requirePermission] --> ZOD[Zod .strict schemas]
     end
 
     subgraph Modules
@@ -13,6 +13,8 @@ flowchart TB
         REM[remediation<br/>vulns · assets · change tickets]
         INT[integrations<br/>connector config · test · sync]
         ADMIN[admin<br/>users · settings · system]
+        CONF[config<br/>status · drift · bundles · demo tools]
+        IDN[identity<br/>enrolment · roles · MFA reset · policy sync]
         AUDIT[audit<br/>query · verify · CSV export]
         COMP[compliance report]
         SSE["stream — SSE"]
@@ -23,12 +25,15 @@ flowchart TB
         AUDSVC[audit service<br/>HMAC hash chain]
         PRISMA[Prisma client<br/>+ read replicas]
         EVENTS[event hub]
-        SCHED[scheduler<br/>connector leases · snapshots<br/>KRI eval · retention]
+        SCHED[scheduler<br/>connector leases · snapshots<br/>KRI eval · retention<br/>live settings · IdP policy · demo ticks]
+        CAT[configuration catalogue<br/>schemas · apply modes · warnings]
+        KCA[Keycloak admin client<br/>provisioner service account]
+        SIM[demo simulator<br/>dataset generator]
     end
 
     subgraph Connectors["Connector framework"]
-        REG[registry<br/>15 adapters]
-        HTTP[ConnectorHttpClient<br/>API key · Basic · OAuth2 · mTLS]
+        REG[registry<br/>19 adapters incl. generic REST/JSON]
+        HTTP[ConnectorHttpClient<br/>API key · Basic · OAuth2 · mTLS<br/>API parameters · retries]
         EGR[egress policy<br/>connect-time IP checks]
         ING[ingest<br/>normalised upserts only]
     end
@@ -41,3 +46,7 @@ flowchart TB
     REG --> ING --> PRISMA
     AUTH & INT & INC & RISK --> CRYPTO
     SSE --> EVENTS
+    ADMIN & CONF & IDN --> CAT
+    IDN --> KCA
+    CONF --> SIM
+    SCHED --> SIM & KCA

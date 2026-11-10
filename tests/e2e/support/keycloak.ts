@@ -46,6 +46,12 @@ export async function createUser(u: NewUser): Promise<string> {
   });
   if (created.status() !== 201) throw new Error(`create ${u.username}: ${created.status()} ${await created.text()}`);
   const id = String(created.headers()['location']).split('/').pop()!;
+  // The realm enforces authenticator enrolment for every new identity (MFA policy
+  // default action). Synthetic automation identities are explicitly exempted here;
+  // the 'mfa' test identity keeps CONFIGURE_TOTP to exercise the enrolment flow.
+  const actions = [...(u.requiredActions ?? []), ...(u.temporary ? ['UPDATE_PASSWORD'] : [])];
+  const exempt = await ctx.put(`/auth/admin/realms/ciso/users/${id}`, { headers, data: { requiredActions: actions } });
+  if (!exempt.ok()) throw new Error(`required actions ${u.username}: ${exempt.status()}`);
   if (u.realmRoles.length) {
     const roles = [];
     for (const r of u.realmRoles) roles.push(await (await ctx.get(`/auth/admin/realms/ciso/roles/${r}`, { headers })).json());
@@ -67,4 +73,11 @@ export async function realmOtpAlgorithm(): Promise<string> {
   const realm = await (await ctx.get('/auth/admin/realms/ciso', { headers: { Authorization: `Bearer ${token}` } })).json();
   await ctx.dispose();
   return realm.otpPolicyAlgorithm as string;
+}
+
+export async function realmRepresentation(): Promise<Record<string, any>> {
+  const { ctx, token } = await adminApi();
+  const realm = await (await ctx.get('/auth/admin/realms/ciso', { headers: { Authorization: `Bearer ${token}` } })).json();
+  await ctx.dispose();
+  return realm;
 }

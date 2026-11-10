@@ -216,13 +216,74 @@ flowchart LR
 ```mermaid
 flowchart TD
     A[Ubuntu / RHEL VM<br/>Docker Engine or Podman + compose] --> B[scripts/generate-certs.sh host<br/>internal CA + service cert]
-    B --> C[scripts/generate-secrets.sh<br/>.env + secrets/ — mode 600, git-ignored]
+    B --> C[scripts/generate-secrets.sh<br/>.env + secrets/ — mode 600, git-ignored<br/>--upgrade adds new secrets only]
     C --> D[docker compose up -d --build]
     D --> E[postgres: TLS entrypoint · SCRAM · init roles]
-    E --> F[migrate: prisma migrate deploy<br/>+ triggers, grants · seed]
-    E --> G[keycloak: realm import<br/>roles · client · demo users w/ forced TOTP]
-    F --> H[api: healthy over mTLS]
-    G --> H
-    H --> I[gateway: TLS 1.3 on :443]
-    I --> J[scripts/smoke-test.sh<br/>52 end-to-end checks]
+    E --> F[migrate: prisma migrate deploy<br/>+ triggers, grants · seed settings and demo data]
+    E --> G[keycloak: realm import<br/>roles · client · demo users with forced TOTP]
+    F --> K[idp-init: provisioner service account<br/>redirect URIs follow PUBLIC_BASE_URL<br/>identity policy · demo admin]
+    G --> K
+    K --> H[api: healthy over mTLS<br/>applies live settings · syncs IdP policy]
+    H --> I[gateway: renders runtime config<br/>rate zones · trusted proxies · canonical host<br/>TLS 1.3 on :443]
+    I --> J[scripts/smoke-test.sh]
+    I --> L[Administrator: Configuration page]
+    L -->|redeploy parameters| M[download deployment.env]
+    M --> N[scripts/apply-deployment.sh<br/>validate · checksum · back up .env<br/>re-issue cert names · compose up]
+    N --> K
+    L -->|host parameters| O[download host baseline script]
+    O --> P[sudo bash script --dry-run, then apply<br/>NTP · DNS · syslog · firewall · updates · sysctl · auditd]
+```
+
+## 10. Administrator-defined configuration (save → validate → audit → apply)
+
+```mermaid
+flowchart TD
+    A[Administrator edits a parameter<br/>Configuration page — form generated<br/>from server field descriptors] --> B["PUT /api/admin/settings/:key"]
+    B --> C{RBAC: system:manage<br/>or parameters:manage?}
+    C -- no --> C1[403 + access.denied audit]
+    C -- yes --> D{Zod schema valid?<br/>IP / CIDR / hostname / https URL<br/>cross-field rules}
+    D -- no --> D1[400 with field-level issues]
+    D -- yes --> E{network allowlist would<br/>exclude caller IP?}
+    E -- yes --> E1[400 LOCKOUT_PREVENTED]
+    E -- no --> F[(system_settings upsert<br/>+ setting.update audit<br/>before / after, same transaction)]
+    F --> G[cache invalidated · compliance warnings computed]
+    G --> H{apply mode}
+    H -- live --> L1[rate limits · network allowlists<br/>egress policy · log level · demo generator<br/>effective within seconds]
+    H -- identity --> L2[Keycloak admin API<br/>TOTP algorithm / digits / period<br/>password policy · lockout · SSO timeouts<br/>CONFIGURE_TOTP default action]
+    H -- redeploy --> L3[deployment.env<br/>public URL or IP · ports · cert names<br/>trusted proxies · edge limits · memory]
+    H -- host --> L4[host baseline script<br/>Ubuntu or RHEL]
+    L1 --> R[Response: value · warnings · applied status]
+    L2 --> R
+    L3 --> R
+    L4 --> R
+    S[Scheduler: every 30 s and 5 min] -.->|re-applies live settings| L1
+    S -.->|retries IdP sync| L2
+```
+
+## 11. Identity enrolment with enforced authenticator-app MFA
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as Administrator
+    participant UI as Dashboard (System and Users)
+    participant API as API (identity routes)
+    participant KC as Keycloak (admin REST)
+    actor User as New user
+    Admin->>UI: Enrol user (username, email, name, roles)
+    UI->>API: POST /api/admin/identity/users
+    API->>API: RBAC users:manage · Zod validation
+    API->>API: CSPRNG one-time password meeting policy
+    API->>KC: create user (UPDATE_PASSWORD + CONFIGURE_TOTP, temporary password)
+    API->>KC: map realm roles (rollback on failure)
+    API->>API: audit identity.user.enrol (no secrets)
+    API-->>UI: one-time password (shown once, never stored)
+    Admin-->>User: share password over a separate channel
+    User->>KC: sign in with one-time password
+    KC-->>User: set new password (policy enforced)
+    KC-->>User: Mobile Authenticator setup (QR, HmacSHA1, 6 digits, 30 s)
+    User->>KC: TOTP code from Google or Microsoft Authenticator
+    KC-->>API: authorization code (PKCE) and roles claim
+    API-->>User: dashboard session (role-scoped)
+    Note over Admin,API: Later: change roles, reset MFA or password, disable, delete — each audited, revoking live sessions when access is reduced
 ```

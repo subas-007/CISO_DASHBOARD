@@ -27,6 +27,7 @@ const CREDS = {
   awxAccess: 'Bearer awx-sim-access-token',
   mispKey: 'misp-sim-key',
   intelKey: 'intel-sim-key',
+  genericToken: 'Bearer generic-sim-token',
 };
 
 const exports = new Map();
@@ -321,6 +322,85 @@ const vendors = {
           { cveID: 'CVE-2024-6387', vendorProject: 'OpenBSD', product: 'OpenSSH', vulnerabilityName: 'OpenSSH Signal Handler Race', dateAdded: today, shortDescription: 'regreSSHion.', requiredAction: 'Upgrade.', dueDate: today, knownRansomwareCampaignUse: 'Unknown' },
         ],
       });
+    }
+    return notFound(res);
+  },
+
+  // Generic REST/JSON vendor behind an API gateway prefix (/gw). Requires the version
+  // header and tenant parameter that administrators configure as connector API parameters.
+  async generic(req, res, url) {
+    if (req.headers.authorization !== CREDS.genericToken) return unauthorized(res);
+    if (!url.pathname.startsWith('/gw/')) return notFound(res);
+    if (req.headers['x-api-version'] !== '2') return send(res, 400, { error: 'X-Api-Version: 2 required' });
+    if (url.searchParams.get('tenant') !== 'emea') return send(res, 403, { error: 'tenant required' });
+    const path = url.pathname.slice(3);
+    const int = (k, d) => Number(url.searchParams.get(k) ?? d);
+
+    if (path === '/v2/status') return send(res, 200, { status: 'ok' });
+
+    // Cursor pagination (body meta.next_cursor), 5 alerts, page size from ?limit
+    if (path === '/v2/alerts' || path === '/v2/flaky-alerts') {
+      if (path === '/v2/flaky-alerts') {
+        stats.genericFlaky = (stats.genericFlaky ?? 0) + 1;
+        if (stats.genericFlaky % 2 === 1) {
+          res.writeHead(503, { 'retry-after': '1', 'content-type': 'application/json' });
+          return res.end('{"error":"temporarily unavailable"}');
+        }
+      }
+      const all = [
+        { id: 'gen-al-1', title: 'Impossible travel detected', severity: 'high', created_at: iso(6 * H), status: 'new', category: 'Identity', asset_count: 1, canary: CANARY },
+        { id: 'gen-al-2', title: 'Ransomware behaviour on file server', severity: 9.6, created_at: iso(5 * H), status: 'contained', category: 'Malware', asset_count: 3 },
+        { id: 'gen-al-3', title: 'Suspicious PowerShell download cradle', severity: 'medium', created_at: iso(4 * H), status: 'investigating', category: 'Execution' },
+        { id: 'gen-al-4', title: 'Phishing link clicked', severity: 'low', created_at: iso(30 * H), status: 'closed', resolved_at: iso(20 * H), category: 'Phishing' },
+        { id: 'gen-al-5', title: 'Data staged for exfiltration', severity: 'critical', created_at: iso(2 * H), status: 'new', category: 'Exfiltration' },
+      ];
+      const limit = int('limit', 100);
+      const start = Number(url.searchParams.get('cursor')?.replace('c', '') ?? 0);
+      const page = all.slice(start, start + limit);
+      const next = start + limit < all.length ? `c${start + limit}` : null;
+      return send(res, 200, { data: page, meta: { next_cursor: next } });
+    }
+
+    // Page-number pagination (?page=1&per_page=N), 5 findings
+    if (path === '/v2/findings') {
+      const all = [
+        { id: 'gen-f-1', asset: { hostname: 'gen-web-01.corp.example', ip: '10.60.0.11' }, cve: 'CVE-2024-3400', title: 'PAN-OS command injection', severity: 'critical', cvss: 10, first_seen: iso(3 * D), state: 'open', canary: CANARY },
+        { id: 'gen-f-2', asset: { hostname: 'gen-web-01.corp.example', ip: '10.60.0.11' }, cve: 'CVE-2024-6387', title: 'OpenSSH regreSSHion', cvss: 8.1, first_seen: iso(2 * D), state: 'open' },
+        { id: 'gen-f-3', asset: { hostname: 'gen-db-02.corp.example', ip: '10.60.0.12' }, cve: 'CVE-2023-44487', title: 'HTTP/2 Rapid Reset', severity: 'high', cvss: 7.5, first_seen: iso(9 * D), state: 'fixed', fixed_at: iso(D) },
+        { id: 'gen-f-4', asset: { hostname: 'gen-db-02.corp.example', ip: '10.60.0.12' }, title: 'TLS 1.0 enabled', severity: 'medium', cvss: 5.3, first_seen: iso(20 * D), state: 'open' },
+        { id: 'gen-f-5', asset: { hostname: 'gen-app-03.corp.example', ip: '10.60.0.13' }, cve: 'CVE-2024-4577', title: 'PHP-CGI argument injection', severity: 'critical', cvss: 9.8, first_seen: iso(D), state: 'open' },
+      ];
+      const per = int('per_page', 100);
+      const pageNo = int('page', 1);
+      return send(res, 200, { results: all.slice((pageNo - 1) * per, pageNo * per) });
+    }
+
+    // Offset pagination (?offset=N&limit=M), 3 devices
+    if (path === '/v2/devices') {
+      const all = [
+        { hostname: 'gen-web-01.corp.example', ip: '10.60.0.11', os: 'Ubuntu 24.04 LTS', compliant: true, missing_patches: 0, last_patched: iso(2 * D), canary: CANARY },
+        { hostname: 'gen-db-02.corp.example', ip: '10.60.0.12', os: 'RHEL 9.4', compliant: 'non-compliant', missing_patches: 4, last_patched: iso(40 * D) },
+        { hostname: 'gen-app-03.corp.example', ip: '10.60.0.13', os: 'Windows Server 2022', missing_patches: 2, last_patched: iso(15 * D) },
+      ];
+      const off = int('offset', 0);
+      const lim = int('limit', 100);
+      return send(res, 200, { items: all.slice(off, off + lim), total: all.length });
+    }
+
+    // RFC 8288 Link-header pagination, 3 changes over 2 pages
+    if (path === '/v2/changes') {
+      const all = [
+        { number: 'GCHG-1001', summary: 'Patch PAN-OS gateways', state: 'Scheduled', url: 'https://itsm.example/changes/GCHG-1001', updated_at: iso(H), canary: CANARY },
+        { number: 'GCHG-1002', summary: 'Disable TLS 1.0 on database tier', state: 'Approved', url: 'javascript:alert(1)', updated_at: iso(2 * H) },
+        { number: 'GCHG-1003', summary: 'Upgrade OpenSSH fleet-wide', state: 'Implement', url: 'https://itsm.example/changes/GCHG-1003', updated_at: iso(3 * H) },
+      ];
+      const pageNo = int('page', 1);
+      const size = int('limit', 2);
+      const slice = all.slice((pageNo - 1) * size, pageNo * size);
+      if (pageNo * size < all.length) {
+        res.setHeader('link', `<https://${req.headers.host}/gw/v2/changes?page=${pageNo + 1}&limit=${size}&tenant=emea>; rel="next"`);
+      }
+      return send(res, 200, slice);
     }
     return notFound(res);
   },

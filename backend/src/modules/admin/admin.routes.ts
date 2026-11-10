@@ -13,7 +13,11 @@ import { publish } from '../../lib/events.js';
 import { prisma, replicaCount } from '../../lib/prisma.js';
 import { IdParam } from '../../lib/validation.js';
 import { schedulerState } from '../../scheduler/scheduler.js';
-import { SETTINGS, SETTING_KEYS, getAllSettings, invalidateSettingsCache } from '../settings/settings.service.js';
+import { SETTINGS, SETTING_KEYS, getAllSettings, getSetting, invalidateSettingsCache, settingWarnings } from '../settings/settings.service.js';
+import { applySettingChange } from '../config/apply.js';
+import { ipInCidrs } from '../../lib/net.js';
+import { idpConfigured, idpSyncState } from '../../idp/identity.service.js';
+import { simulatorState } from '../../demo/simulator.js';
 
 export const adminRouter = Router();
 
@@ -68,7 +72,9 @@ adminRouter.post('/users/:id/revoke-sessions', requirePermission('users:manage')
 adminRouter.get('/settings', requirePermission('dashboard:read'), async (req, res) => {
   const all = await getAllSettings();
   res.json({
-    items: Object.entries(all).map(([key, s]) => ({ key, ...s, editable: can(req.auth!.roles, s.permission) })),
+    items: Object.values(all)
+      .filter((s) => can(req.auth!.roles, s.readPermission))
+      .map((s) => ({ ...s, editable: can(req.auth!.roles, s.permission) })),
   });
 });
 
@@ -80,6 +86,13 @@ adminRouter.put('/settings/:key', async (req, res) => {
     throw forbidden();
   }
   const { value } = z.object({ value: def.schema }).strict().parse(req.body);
+  // Never let an administrator lock themselves (and everyone on their network) out.
+  if (key === 'networkAccess') {
+    const v = value as { allowedClientCidrs: string[] };
+    if (v.allowedClientCidrs.length > 0 && !ipInCidrs(req.ip, v.allowedClientCidrs)) {
+      throw badRequest(`Your current address (${req.ip}) is not in the allowed networks — saving would lock you out`, 'LOCKOUT_PREVENTED');
+    }
+  }
   await prisma.$transaction(async (tx) => {
     const before = await tx.systemSetting.findUnique({ where: { key } });
     await tx.systemSetting.upsert({
@@ -97,13 +110,15 @@ adminRouter.put('/settings/:key', async (req, res) => {
     });
   });
   invalidateSettingsCache();
+  const applied = await applySettingChange(key);
   publish({ type: 'kpi' });
-  res.json({ key, value });
+  res.json({ key, value, warnings: settingWarnings(key, value), applied });
 });
 
 /* ------------------------------ System health ------------------------------ */
 
 adminRouter.get('/system', requirePermission('system:manage'), async (_req, res) => {
+  const [sp, identity] = await Promise.all([getSetting('sessionPolicy'), getSetting('identity')]);
   const t0 = Date.now();
   await prisma.$queryRaw`SELECT 1`;
   const dbLatencyMs = Date.now() - t0;
@@ -126,12 +141,16 @@ adminRouter.get('/system', requirePermission('system:manage'), async (_req, res)
     audit: { records: auditCount, lastEventAt: lastAudit?.ts ?? null },
     security: {
       encryptionKeyId: activeEncryptionKeyId(),
-      accessTokenTtlSec: env.ACCESS_TOKEN_TTL_SEC,
-      refreshIdleTtlSec: env.REFRESH_IDLE_TTL_SEC,
-      sessionAbsoluteTtlSec: env.SESSION_ABSOLUTE_TTL_SEC,
+      accessTokenTtlSec: sp.accessTokenTtlSec,
+      refreshIdleTtlSec: sp.idleTimeoutSec,
+      sessionAbsoluteTtlSec: sp.absoluteTimeoutSec,
       mtlsFromGateway: env.TLS_REQUIRE_CLIENT_CERT,
       connectorHttpsOnly: !env.CONNECTOR_ALLOW_INSECURE_HTTP,
+      mfaRequired: identity.mfaRequired,
+      otpAlgorithm: identity.otpAlgorithm,
+      idpPolicySync: idpConfigured() ? (idpSyncState.ok ? 'in sync' : idpSyncState.message) : 'external IdP',
     },
+    demo: { demoMode: env.DEMO_MODE, simulatorTicks: simulatorState.ticks, lastTickAt: simulatorState.lastTickAt },
   });
 });
 

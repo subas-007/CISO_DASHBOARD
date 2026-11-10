@@ -29,7 +29,10 @@ const AccessClaims = z.object({
 });
 export type AccessClaims = z.infer<typeof AccessClaims>;
 
-export async function signAccessToken(claims: { userId: string; sessionId: string; name: string; roles: string[] }): Promise<string> {
+export async function signAccessToken(
+  claims: { userId: string; sessionId: string; name: string; roles: string[] },
+  ttlSec: number = env.ACCESS_TOKEN_TTL_SEC,
+): Promise<string> {
   return new SignJWT({ sid: claims.sessionId, name: claims.name, roles: claims.roles })
     .setProtectedHeader({ alg: 'HS512', typ: 'JWT' })
     .setSubject(claims.userId)
@@ -37,7 +40,7 @@ export async function signAccessToken(claims: { userId: string; sessionId: strin
     .setAudience(AUDIENCE)
     .setIssuedAt()
     .setJti(randomUUID())
-    .setExpirationTime(`${env.ACCESS_TOKEN_TTL_SEC}s`)
+    .setExpirationTime(`${ttlSec}s`)
     .sign(accessKey);
 }
 

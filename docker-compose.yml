@@ -4,6 +4,9 @@
 #   2. ./scripts/generate-secrets.sh                # .env + ./secrets (git-ignored)
 #   3. docker compose up -d --build
 #
+# Later changes to the public address, ports, trusted proxies or resources are made by an
+# administrator in Configuration → Deployment and applied with scripts/apply-deployment.sh.
+#
 # Network zones (zero-trust segmentation):
 #   edge   — only the gateway; ports 80/443 published
 #   app    — internal: gateway ↔ api (mTLS), gateway/api ↔ keycloak (TLS)
@@ -29,6 +32,7 @@ x-api-secrets: &api-secrets
   - data_encryption_keys
   - blind_index_key
   - audit_hmac_key
+  - idp_provisioner_secret
 
 x-api-env: &api-env
   NODE_ENV: production
@@ -63,6 +67,20 @@ x-api-env: &api-env
   CONNECTOR_BLOCKED_CIDRS: 172.30.0.0/16
   CONNECTOR_ALLOWED_HOSTS: ${CONNECTOR_ALLOWED_HOSTS:-}
   CONNECTOR_BLOCK_PRIVATE_NETWORKS: ${CONNECTOR_BLOCK_PRIVATE_NETWORKS:-false}
+  # Demo profile (live data simulator, dataset regeneration)
+  DEMO_MODE: ${SEED_DEMO_DATA:-false}
+  # Identity provider administration (MFA / password policy sync, user enrolment)
+  IDP_ADMIN_URL: https://keycloak:8443/auth
+  IDP_REALM: ciso
+  IDP_PROVISIONER_CLIENT_ID: ciso-provisioner
+  IDP_PROVISIONER_CLIENT_SECRET_FILE: /run/secrets/idp_provisioner_secret
+  # Running deployment profile (non-secret) — lets the UI show drift vs. desired values
+  DEPLOY_HTTPS_PORT: ${HTTPS_PORT:-443}
+  DEPLOY_HTTP_PORT: ${HTTP_PORT:-80}
+  DEPLOY_CERT_SANS: ${CERT_SANS:-}
+  DEPLOY_TRUSTED_PROXIES: ${TRUSTED_UPSTREAM_PROXIES:-}
+  DEPLOY_EDGE_RPS: ${EDGE_RATE_LIMIT_RPS:-50}
+  DEPLOY_EDGE_AUTH_RPS: ${EDGE_AUTH_RATE_LIMIT_RPS:-20}
 
 services:
   postgres:
@@ -91,7 +109,7 @@ services:
       retries: 10
     deploy:
       resources:
-        limits: { cpus: "2", memory: 2g }
+        limits: { cpus: "2", memory: "${POSTGRES_MEMORY:-2048m}" }
 
   keycloak:
     <<: *hardening
@@ -133,7 +151,7 @@ services:
       start_period: 60s
     deploy:
       resources:
-        limits: { cpus: "2", memory: 1536m }
+        limits: { cpus: "2", memory: "${KEYCLOAK_MEMORY:-1536m}" }
 
   migrate:
     # Same image as the API (built by the api service); runs migrations + seed once.
@@ -151,6 +169,7 @@ services:
     environment:
       <<: *api-env
       DATABASE_URL_FILE: /run/secrets/migrate_database_url
+      IDP_PROVISIONER_CLIENT_SECRET_FILE: ""
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
       SCHEDULER_ENABLED: "false"
     secrets: [migrate_database_url, oidc_client_secret, jwt_secret, state_encryption_key, data_encryption_keys, blind_index_key, audit_hmac_key]
@@ -159,6 +178,34 @@ services:
     networks: [data]
     depends_on:
       postgres: { condition: service_healthy }
+
+  idp-init:
+    # One-shot on every deploy: provisioner service account, OIDC redirect URIs for the
+    # current public URL, MFA / password policy, and (demo profile) the demo administrator.
+    # The only container that ever receives the Keycloak bootstrap admin password.
+    image: ciso-dashboard/api:1.0.0
+    pull_policy: never
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: ["/tmp:size=16m,noexec,nosuid"]
+    restart: "no"
+    command: ["node", "dist/idp/bootstrap.js"]
+    environment:
+      <<: *api-env
+      SCHEDULER_ENABLED: "false"
+      IDP_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:-kcadmin}
+      IDP_BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/kc_bootstrap_admin_password
+      DEMO_ADMIN_USERNAME: ${DEMO_ADMIN_USERNAME:-}
+      DEMO_ADMIN_PASSWORD_FILE: /run/secrets/demo_admin_password
+    secrets: [database_url, oidc_client_secret, jwt_secret, state_encryption_key, data_encryption_keys, blind_index_key, audit_hmac_key, idp_provisioner_secret, kc_bootstrap_admin_password, demo_admin_password]
+    volumes:
+      - ./certs:/run/certs:ro,z
+    networks: [data]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      keycloak: { condition: service_healthy }
 
   api:
     <<: *hardening
@@ -175,10 +222,11 @@ services:
     networks: [app, data, egress]
     depends_on:
       migrate: { condition: service_completed_successfully }
+      idp-init: { condition: service_completed_successfully }
       keycloak: { condition: service_healthy }
     deploy:
       resources:
-        limits: { cpus: "2", memory: 1g }
+        limits: { cpus: "2", memory: "${API_MEMORY:-1024m}" }
 
   gateway:
     <<: *hardening
@@ -192,6 +240,12 @@ services:
     ports:
       - "${HTTPS_PORT:-443}:8443"
       - "${HTTP_PORT:-80}:8080"
+    environment:
+      # Deployment profile → runtime NGINX includes (infra/gateway/40-ciso-runtime.sh)
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      TRUSTED_UPSTREAM_PROXIES: ${TRUSTED_UPSTREAM_PROXIES:-}
+      EDGE_RATE_LIMIT_RPS: ${EDGE_RATE_LIMIT_RPS:-50}
+      EDGE_AUTH_RATE_LIMIT_RPS: ${EDGE_AUTH_RATE_LIMIT_RPS:-20}
     volumes:
       - ./certs:/etc/nginx/certs:ro,z
     networks: [edge, app]
@@ -211,6 +265,9 @@ secrets:
   data_encryption_keys: { file: ./secrets/data_encryption_keys }
   blind_index_key: { file: ./secrets/blind_index_key }
   audit_hmac_key: { file: ./secrets/audit_hmac_key }
+  idp_provisioner_secret: { file: ./secrets/idp_provisioner_secret }
+  kc_bootstrap_admin_password: { file: ./secrets/kc_bootstrap_admin_password }
+  demo_admin_password: { file: ./secrets/demo_admin_password }
 
 volumes:
   pgdata: {}

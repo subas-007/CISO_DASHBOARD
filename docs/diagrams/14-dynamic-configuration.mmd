@@ -1,0 +1,21 @@
+flowchart TD
+    A[Administrator edits a parameter<br/>Configuration page — form generated<br/>from server field descriptors] --> B["PUT /api/admin/settings/:key"]
+    B --> C{RBAC: system:manage<br/>or parameters:manage?}
+    C -- no --> C1[403 + access.denied audit]
+    C -- yes --> D{Zod schema valid?<br/>IP / CIDR / hostname / https URL<br/>cross-field rules}
+    D -- no --> D1[400 with field-level issues]
+    D -- yes --> E{network allowlist would<br/>exclude caller IP?}
+    E -- yes --> E1[400 LOCKOUT_PREVENTED]
+    E -- no --> F[(system_settings upsert<br/>+ setting.update audit<br/>before / after, same transaction)]
+    F --> G[cache invalidated · compliance warnings computed]
+    G --> H{apply mode}
+    H -- live --> L1[rate limits · network allowlists<br/>egress policy · log level · demo generator<br/>effective within seconds]
+    H -- identity --> L2[Keycloak admin API<br/>TOTP algorithm / digits / period<br/>password policy · lockout · SSO timeouts<br/>CONFIGURE_TOTP default action]
+    H -- redeploy --> L3[deployment.env<br/>public URL or IP · ports · cert names<br/>trusted proxies · edge limits · memory]
+    H -- host --> L4[host baseline script<br/>Ubuntu or RHEL]
+    L1 --> R[Response: value · warnings · applied status]
+    L2 --> R
+    L3 --> R
+    L4 --> R
+    S[Scheduler: every 30 s and 5 min] -.->|re-applies live settings| L1
+    S -.->|retries IdP sync| L2

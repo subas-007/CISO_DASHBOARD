@@ -8,10 +8,13 @@ import { createApp } from './app.js';
 import { startScheduler, stopScheduler } from './scheduler/scheduler.js';
 import { ensureDefaultSettings } from './modules/settings/settings.service.js';
 import { audit } from './audit/audit.service.js';
+import { applyLiveSettings } from './modules/config/apply.js';
+import { syncIdentityPolicy } from './idp/identity.service.js';
 
 async function main(): Promise<void> {
   await prisma.$connect();
   await ensureDefaultSettings();
+  await applyLiveSettings();
   const app = createApp();
 
   let server: http.Server | https.Server;
@@ -40,6 +43,8 @@ async function main(): Promise<void> {
     logger.info({ port: env.PORT, tls: !!env.TLS_CERT_FILE, mtls: env.TLS_REQUIRE_CLIENT_CERT }, 'CISO dashboard API listening');
   });
   if (env.SCHEDULER_ENABLED) startScheduler();
+  // Converge the identity provider on the stored policy (non-blocking; retried by the scheduler).
+  void syncIdentityPolicy();
   await audit({ action: 'system.start', outcome: 'SUCCESS', details: { version: env.APP_VERSION } }, { bestEffort: true });
 
   const shutdown = (signal: string) => {

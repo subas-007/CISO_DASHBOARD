@@ -40,6 +40,8 @@
       <a href="#11-audit-chain">Audit chain</a>
       <a href="#12-risk-drilldown-journey">Risk drilldown journey</a>
       <a href="#13-deployment-bootstrap">Deployment bootstrap</a>
+      <a href="#14-dynamic-configuration">Dynamic configuration</a>
+      <a href="#15-identity-enrolment">Identity enrolment</a>
   </nav>
   <main>
   <section id="01-system-context">
@@ -77,18 +79,19 @@ flowchart TB
     Browser([Browser&lt;br/&gt;React SPA])
 
     subgraph EDGE["edge network — only published ports 80/443"]
-        GW["Gateway — NGINX (unprivileged, read-only FS)&lt;br/&gt;TLS 1.3 only · HSTS · strict CSP&lt;br/&gt;rate limiting · serves SPA"]
+        GW["Gateway — NGINX (unprivileged, read-only FS)&lt;br/&gt;TLS 1.3 only · HSTS · strict CSP&lt;br/&gt;per-IP flood limits · canonical-host redirect&lt;br/&gt;auth_request network gate · serves SPA"]
     end
 
     subgraph APPNET["app network (internal: true)"]
-        API["API — Node.js 22 / Express 5 / TypeScript&lt;br/&gt;OIDC RP · RBAC · Zod validation&lt;br/&gt;KPI/KRI engine · connector framework&lt;br/&gt;scheduler · SSE stream"]
-        KC["Keycloak 26 (OIDC IdP)&lt;br/&gt;MFA (TOTP) · brute-force protection&lt;br/&gt;password policy"]
+        API["API — Node.js 22 / Express 5 / TypeScript&lt;br/&gt;OIDC RP · RBAC · Zod validation&lt;br/&gt;KPI/KRI engine · connector framework&lt;br/&gt;configuration catalogue · scheduler · SSE"]
+        KC["Keycloak 26 (OIDC IdP)&lt;br/&gt;MFA (TOTP) · brute-force protection&lt;br/&gt;admin-defined password policy"]
     end
 
     subgraph DATANET["data network (internal: true)"]
-        PG[("PostgreSQL 17 primary&lt;br/&gt;TLS 1.3 · SCRAM-SHA-256&lt;br/&gt;append-only audit_log")]
+        PG[("PostgreSQL 17 primary&lt;br/&gt;TLS 1.3 · SCRAM-SHA-256&lt;br/&gt;append-only audit_log · system_settings")]
         PGR[("Read replicas&lt;br/&gt;(optional, multi-cluster)")]
         MIG["migrate (one-shot)&lt;br/&gt;prisma migrate deploy + seed"]
+        IDPI["idp-init (one-shot, every deploy)&lt;br/&gt;provisioner account · redirect URIs&lt;br/&gt;identity policy · demo admin"]
     end
 
     subgraph EGRESS["egress network"]
@@ -96,17 +99,23 @@ flowchart TB
     end
 
     VAULT[("HashiCorp Vault KV v2&lt;br/&gt;(optional secrets provider)")]
+    HOST["Docker host (Ubuntu / RHEL)&lt;br/&gt;apply-deployment.sh · host baseline script"]
 
     Browser -- "HTTPS (TLS 1.3)" --&gt; GW
     GW -- "mTLS 1.3 (client cert)" --&gt; API
+    GW -- "auth_request network gate" --&gt; API
     GW -- "TLS 1.3 /auth/*" --&gt; KC
     API -- "TLS backchannel (token, JWKS, userinfo)" --&gt; KC
+    API -- "Admin REST as ciso-provisioner: policy sync, enrolment" --&gt; KC
     API -- "TLS + SCRAM (ciso_app: DML only)" --&gt; PG
     API -.-&gt;|reads| PGR
     KC -- "TLS verify-full" --&gt; PG
     MIG -- "TLS (owner role)" --&gt; PG
-    API -- "HTTPS · SSRF-guarded · size-capped" --&gt; EXT
+    IDPI -- "Admin REST (bootstrap admin)" --&gt; KC
+    IDPI -- "reads identity settings" --&gt; PG
+    API -- "HTTPS · SSRF-guarded · retries · size-capped" --&gt; EXT
     API -.-&gt;|AppRole or token| VAULT
+    HOST -.-&gt;|operator applies deployment.env| GW
 </pre>
   </section>
   <section id="03-api-components">
@@ -115,7 +124,7 @@ flowchart TB
 flowchart TB
     subgraph Pipeline["Request pipeline (app.ts)"]
         direction LR
-        H[helmet headers&lt;br/&gt;no-store] --&gt; RL[rate limit] --&gt; CSRF[CSRF guard&lt;br/&gt;Origin + double-submit] --&gt; AUTHN[authenticate&lt;br/&gt;JWT + live session] --&gt; RBAC[requirePermission] --&gt; ZOD[Zod .strict schemas]
+        H[helmet headers&lt;br/&gt;no-store] --&gt; RL[per-IP rate limit&lt;br/&gt;admin-defined] --&gt; NET[network allowlist&lt;br/&gt;admin-defined] --&gt; CSRF[CSRF guard&lt;br/&gt;Origin + double-submit] --&gt; AUTHN[authenticate&lt;br/&gt;JWT + live session] --&gt; URL[per-user rate limit] --&gt; RBAC[requirePermission] --&gt; ZOD[Zod .strict schemas]
     end
 
     subgraph Modules
@@ -127,6 +136,8 @@ flowchart TB
         REM[remediation&lt;br/&gt;vulns · assets · change tickets]
         INT[integrations&lt;br/&gt;connector config · test · sync]
         ADMIN[admin&lt;br/&gt;users · settings · system]
+        CONF[config&lt;br/&gt;status · drift · bundles · demo tools]
+        IDN[identity&lt;br/&gt;enrolment · roles · MFA reset · policy sync]
         AUDIT[audit&lt;br/&gt;query · verify · CSV export]
         COMP[compliance report]
         SSE["stream — SSE"]
@@ -137,12 +148,15 @@ flowchart TB
         AUDSVC[audit service&lt;br/&gt;HMAC hash chain]
         PRISMA[Prisma client&lt;br/&gt;+ read replicas]
         EVENTS[event hub]
-        SCHED[scheduler&lt;br/&gt;connector leases · snapshots&lt;br/&gt;KRI eval · retention]
+        SCHED[scheduler&lt;br/&gt;connector leases · snapshots&lt;br/&gt;KRI eval · retention&lt;br/&gt;live settings · IdP policy · demo ticks]
+        CAT[configuration catalogue&lt;br/&gt;schemas · apply modes · warnings]
+        KCA[Keycloak admin client&lt;br/&gt;provisioner service account]
+        SIM[demo simulator&lt;br/&gt;dataset generator]
     end
 
     subgraph Connectors["Connector framework"]
-        REG[registry&lt;br/&gt;15 adapters]
-        HTTP[ConnectorHttpClient&lt;br/&gt;API key · Basic · OAuth2 · mTLS]
+        REG[registry&lt;br/&gt;19 adapters incl. generic REST/JSON]
+        HTTP[ConnectorHttpClient&lt;br/&gt;API key · Basic · OAuth2 · mTLS&lt;br/&gt;API parameters · retries]
         EGR[egress policy&lt;br/&gt;connect-time IP checks]
         ING[ingest&lt;br/&gt;normalised upserts only]
     end
@@ -155,6 +169,10 @@ flowchart TB
     REG --&gt; ING --&gt; PRISMA
     AUTH &amp; INT &amp; INC &amp; RISK --&gt; CRYPTO
     SSE --&gt; EVENTS
+    ADMIN &amp; CONF &amp; IDN --&gt; CAT
+    IDN --&gt; KCA
+    CONF --&gt; SIM
+    SCHED --&gt; SIM &amp; KCA
 </pre>
   </section>
   <section id="04-data-model">
@@ -194,6 +212,7 @@ erDiagram
         enum authMode
         int pollIntervalSec
         json settings
+        json requestOptions "path prefix, headers, query, timeout, retries"
         string secretEnc "AES-256-GCM, AAD=connector id"
         enum status
     }
@@ -451,15 +470,76 @@ flowchart LR
     <pre class="mermaid">
 flowchart TD
     A[Ubuntu / RHEL VM&lt;br/&gt;Docker Engine or Podman + compose] --&gt; B[scripts/generate-certs.sh host&lt;br/&gt;internal CA + service cert]
-    B --&gt; C[scripts/generate-secrets.sh&lt;br/&gt;.env + secrets/ — mode 600, git-ignored]
+    B --&gt; C[scripts/generate-secrets.sh&lt;br/&gt;.env + secrets/ — mode 600, git-ignored&lt;br/&gt;--upgrade adds new secrets only]
     C --&gt; D[docker compose up -d --build]
     D --&gt; E[postgres: TLS entrypoint · SCRAM · init roles]
-    E --&gt; F[migrate: prisma migrate deploy&lt;br/&gt;+ triggers, grants · seed]
-    E --&gt; G[keycloak: realm import&lt;br/&gt;roles · client · demo users w/ forced TOTP]
-    F --&gt; H[api: healthy over mTLS]
-    G --&gt; H
-    H --&gt; I[gateway: TLS 1.3 on :443]
-    I --&gt; J[scripts/smoke-test.sh&lt;br/&gt;52 end-to-end checks]
+    E --&gt; F[migrate: prisma migrate deploy&lt;br/&gt;+ triggers, grants · seed settings and demo data]
+    E --&gt; G[keycloak: realm import&lt;br/&gt;roles · client · demo users with forced TOTP]
+    F --&gt; K[idp-init: provisioner service account&lt;br/&gt;redirect URIs follow PUBLIC_BASE_URL&lt;br/&gt;identity policy · demo admin]
+    G --&gt; K
+    K --&gt; H[api: healthy over mTLS&lt;br/&gt;applies live settings · syncs IdP policy]
+    H --&gt; I[gateway: renders runtime config&lt;br/&gt;rate zones · trusted proxies · canonical host&lt;br/&gt;TLS 1.3 on :443]
+    I --&gt; J[scripts/smoke-test.sh]
+    I --&gt; L[Administrator: Configuration page]
+    L --&gt;|redeploy parameters| M[download deployment.env]
+    M --&gt; N[scripts/apply-deployment.sh&lt;br/&gt;validate · checksum · back up .env&lt;br/&gt;re-issue cert names · compose up]
+    N --&gt; K
+    L --&gt;|host parameters| O[download host baseline script]
+    O --&gt; P[sudo bash script --dry-run, then apply&lt;br/&gt;NTP · DNS · syslog · firewall · updates · sysctl · auditd]
+</pre>
+  </section>
+  <section id="14-dynamic-configuration">
+    <h2>Dynamic configuration</h2>
+    <pre class="mermaid">
+flowchart TD
+    A[Administrator edits a parameter&lt;br/&gt;Configuration page — form generated&lt;br/&gt;from server field descriptors] --&gt; B["PUT /api/admin/settings/:key"]
+    B --&gt; C{RBAC: system:manage&lt;br/&gt;or parameters:manage?}
+    C -- no --&gt; C1[403 + access.denied audit]
+    C -- yes --&gt; D{Zod schema valid?&lt;br/&gt;IP / CIDR / hostname / https URL&lt;br/&gt;cross-field rules}
+    D -- no --&gt; D1[400 with field-level issues]
+    D -- yes --&gt; E{network allowlist would&lt;br/&gt;exclude caller IP?}
+    E -- yes --&gt; E1[400 LOCKOUT_PREVENTED]
+    E -- no --&gt; F[(system_settings upsert&lt;br/&gt;+ setting.update audit&lt;br/&gt;before / after, same transaction)]
+    F --&gt; G[cache invalidated · compliance warnings computed]
+    G --&gt; H{apply mode}
+    H -- live --&gt; L1[rate limits · network allowlists&lt;br/&gt;egress policy · log level · demo generator&lt;br/&gt;effective within seconds]
+    H -- identity --&gt; L2[Keycloak admin API&lt;br/&gt;TOTP algorithm / digits / period&lt;br/&gt;password policy · lockout · SSO timeouts&lt;br/&gt;CONFIGURE_TOTP default action]
+    H -- redeploy --&gt; L3[deployment.env&lt;br/&gt;public URL or IP · ports · cert names&lt;br/&gt;trusted proxies · edge limits · memory]
+    H -- host --&gt; L4[host baseline script&lt;br/&gt;Ubuntu or RHEL]
+    L1 --&gt; R[Response: value · warnings · applied status]
+    L2 --&gt; R
+    L3 --&gt; R
+    L4 --&gt; R
+    S[Scheduler: every 30 s and 5 min] -.-&gt;|re-applies live settings| L1
+    S -.-&gt;|retries IdP sync| L2
+</pre>
+  </section>
+  <section id="15-identity-enrolment">
+    <h2>Identity enrolment</h2>
+    <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Admin as Administrator
+    participant UI as Dashboard (System and Users)
+    participant API as API (identity routes)
+    participant KC as Keycloak (admin REST)
+    actor User as New user
+    Admin-&gt;&gt;UI: Enrol user (username, email, name, roles)
+    UI-&gt;&gt;API: POST /api/admin/identity/users
+    API-&gt;&gt;API: RBAC users:manage · Zod validation
+    API-&gt;&gt;API: CSPRNG one-time password meeting policy
+    API-&gt;&gt;KC: create user (UPDATE_PASSWORD + CONFIGURE_TOTP, temporary password)
+    API-&gt;&gt;KC: map realm roles (rollback on failure)
+    API-&gt;&gt;API: audit identity.user.enrol (no secrets)
+    API--&gt;&gt;UI: one-time password (shown once, never stored)
+    Admin--&gt;&gt;User: share password over a separate channel
+    User-&gt;&gt;KC: sign in with one-time password
+    KC--&gt;&gt;User: set new password (policy enforced)
+    KC--&gt;&gt;User: Mobile Authenticator setup (QR, HmacSHA1, 6 digits, 30 s)
+    User-&gt;&gt;KC: TOTP code from Google or Microsoft Authenticator
+    KC--&gt;&gt;API: authorization code (PKCE) and roles claim
+    API--&gt;&gt;User: dashboard session (role-scoped)
+    Note over Admin,API: Later: change roles, reset MFA or password, disable, delete — each audited, revoking live sessions when access is reduced
 </pre>
   </section>
   </main>

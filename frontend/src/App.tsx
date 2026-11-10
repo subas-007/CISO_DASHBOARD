@@ -17,6 +17,7 @@ import { ParametersPage } from './pages/ParametersPage';
 import { AuditPage } from './pages/AuditPage';
 import { CompliancePage } from './pages/CompliancePage';
 import { AdminPage } from './pages/AdminPage';
+import { ConfigurationPage } from './pages/ConfigurationPage';
 
 function Guard({ permission, children }: { permission: string; children: ReactNode }) {
   const { can } = useAuth();
@@ -51,6 +52,7 @@ function Protected() {
           <Route path="audit" element={<Guard permission="audit:read"><AuditPage /></Guard>} />
           <Route path="compliance" element={<Guard permission="compliance:read"><CompliancePage /></Guard>} />
           <Route path="admin" element={<Guard permission="users:read"><AdminPage /></Guard>} />
+          <Route path="configuration" element={<Guard permission="config:read"><ConfigurationPage /></Guard>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

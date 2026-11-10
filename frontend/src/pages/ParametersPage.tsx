@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import { Check, Save } from 'lucide-react';
 import { api, errorMessage } from '../lib/api';
@@ -7,6 +8,7 @@ import { useAuth } from '../auth/AuthContext';
 import { Card, Empty, ErrorBox, Notice, PageHeader, RagBadge, Spinner, Toggle } from '../components/ui';
 import { fmtDateTime, fmtNumber } from '../lib/format';
 import type { KriStatus, Rag, SettingItem } from '../lib/types';
+import { SettingForm } from '../components/SettingForm';
 
 interface Breach {
   id: string;
@@ -67,10 +69,13 @@ export function ParametersPage() {
       </Card>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <Card title="System parameters">
+        <Card title="Risk & retention parameters">
           {!settings.data ? <Spinner /> : (
             <div className="space-y-4">
-              {settings.data.items.map((s) => <SettingRow key={s.key} item={s} onSaved={() => void settings.reload(true)} />)}
+              {settings.data.items
+                .filter((s) => s.category === 'risk' || s.category === 'retention')
+                .map((s) => <SettingForm compact key={s.key} item={s} onSaved={() => void settings.reload(true)} />)}
+              {can('config:read') && <p className="text-xs text-slate-500">Platform, identity, network, deployment and host parameters are on the <Link className="text-sky-300 underline" to="/configuration">Configuration</Link> page.</p>}
             </div>
           )}
         </Card>
@@ -159,44 +164,5 @@ function KriRow({ kri, editable, onSaved }: { kri: KriStatus; editable: boolean;
         </tr>
       )}
     </>
-  );
-}
-
-function SettingRow({ item, onSaved }: { item: SettingItem; onSaved: () => void }) {
-  const [text, setText] = useState(typeof item.value === 'object' ? JSON.stringify(item.value) : String(item.value));
-  const [error, setError] = useState<string | null>(null);
-  const [ok, setOk] = useState(false);
-  const save = async () => {
-    setError(null);
-    let value: unknown;
-    try {
-      value = typeof item.value === 'object' ? JSON.parse(text) : Number(text);
-    } catch {
-      setError('Invalid JSON');
-      return;
-    }
-    try {
-      await api(`/admin/settings/${item.key}`, { method: 'PUT', body: { value } });
-      setOk(true);
-      setTimeout(() => setOk(false), 2000);
-      onSaved();
-    } catch (e) {
-      setError(errorMessage(e));
-    }
-  };
-  return (
-    <div>
-      <div className="label">{item.label}</div>
-      <div className="flex gap-2">
-        <input className="input font-mono text-xs" disabled={!item.editable} value={text} onChange={(e) => setText(e.target.value)} aria-label={item.label} />
-        {item.editable && (
-          <button className="btn-secondary" onClick={() => void save()}>
-            {ok ? <Check className="h-4 w-4 text-emerald-300" /> : <Save className="h-4 w-4" />}
-          </button>
-        )}
-      </div>
-      {!item.editable && <div className="mt-1 text-xs text-slate-500">Requires {item.permission}</div>}
-      {error && <div className="mt-1 text-xs text-rose-300">{error}</div>}
-    </div>
   );
 }

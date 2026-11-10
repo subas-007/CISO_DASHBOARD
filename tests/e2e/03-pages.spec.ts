@@ -14,12 +14,13 @@ const PAGES = [
   { path: '/audit', nav: 'Audit Log', perm: 'audit:read', heading: 'Immutable Security Audit Log', shot: '09-audit-log' },
   { path: '/integrations', nav: 'Integrations', perm: 'integration:read', heading: 'Integration Layer', shot: '10-integrations' },
   { path: '/admin', nav: 'System & Users', perm: 'users:read', heading: 'System Management & Users', shot: '11-system-users' },
+  { path: '/configuration', nav: 'Configuration', perm: 'config:read', heading: 'System Configuration', shot: '13-configuration' },
 ];
 
 const SCREENSHOT_ROLE: Record<string, RoleKey> = {
   '01-overview': 'ciso', '02-risk-matrix': 'ciso', '03-risk-acceptance': 'ciso', '04-threat-stream': 'secops',
   '05-incidents': 'secops', '06-remediation': 'patch', '07-kri-parameters': 'ciso', '08-compliance': 'auditor',
-  '09-audit-log': 'auditor', '10-integrations': 'admin', '11-system-users': 'admin',
+  '09-audit-log': 'auditor', '10-integrations': 'admin', '11-system-users': 'admin', '13-configuration': 'admin',
 };
 
 test.describe('Every page for every role', () => {

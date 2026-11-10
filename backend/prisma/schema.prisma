@@ -160,6 +160,8 @@ model Connector {
   pollIntervalSec Int
   enabled         Boolean           @default(false)
   settings        Json              @default("{}")
+  /// Administrator-defined API parameters (path prefix, headers, query, timeout, retries)
+  requestOptions  Json              @default("{}")
   secretEnc       String?
   status          ConnectorStatus   @default(UNTESTED)
   lastTestAt      DateTime?

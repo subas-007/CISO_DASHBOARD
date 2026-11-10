@@ -20,6 +20,9 @@ export const SECRET_KEYS = [
   'DATA_ENCRYPTION_KEYS',
   'BLIND_INDEX_KEY',
   'AUDIT_HMAC_KEY',
+  'IDP_PROVISIONER_CLIENT_SECRET',
+  'IDP_BOOTSTRAP_ADMIN_PASSWORD',
+  'DEMO_ADMIN_PASSWORD',
 ] as const;
 
 async function readSecretFile(path: string): Promise<string> {

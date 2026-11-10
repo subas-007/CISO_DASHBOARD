@@ -19,6 +19,7 @@ import { prisma } from '../lib/prisma.js';
 import { audit } from '../audit/audit.service.js';
 import { getOidcClient, mapRoles, resolveClaims } from './oidc.js';
 import { COOKIE, signAccessToken } from './tokens.js';
+import { getSetting } from '../modules/settings/settings.service.js';
 
 export interface IssuedSession {
   sessionId: string;
@@ -39,6 +40,7 @@ export async function createSession(user: User, opts: CreateOpts): Promise<Issue
   const id = randomUUID();
   const refreshToken = randomToken(32);
   const now = Date.now();
+  const policy = await getSetting('sessionPolicy');
   await prisma.session.create({
     data: {
       id,
@@ -49,8 +51,8 @@ export async function createSession(user: User, opts: CreateOpts): Promise<Issue
       idTokenEnc: encryptOptional(opts.idToken, `session:${id}:id_token`),
       ip: opts.ip ?? null,
       userAgent: opts.userAgent?.slice(0, 256) ?? null,
-      expiresAt: new Date(now + env.REFRESH_IDLE_TTL_SEC * 1000),
-      absoluteExpiresAt: opts.absoluteExpiresAt ?? new Date(now + env.SESSION_ABSOLUTE_TTL_SEC * 1000),
+      expiresAt: new Date(now + policy.idleTimeoutSec * 1000),
+      absoluteExpiresAt: opts.absoluteExpiresAt ?? new Date(now + policy.absoluteTimeoutSec * 1000),
     },
   });
   return { sessionId: id, refreshToken, user };
@@ -163,16 +165,17 @@ export async function isSessionValid(sessionId: string): Promise<boolean> {
 const baseCookie = () => ({ httpOnly: true, secure: env.COOKIE_SECURE, sameSite: 'strict' as const, path: '/' });
 
 export async function issueAuthCookies(res: Response, s: IssuedSession): Promise<void> {
+  const policy = await getSetting('sessionPolicy');
   const access = await signAccessToken({
     userId: s.user.id,
     sessionId: s.sessionId,
     name: s.user.displayName,
     roles: s.user.roles,
-  });
-  res.cookie(COOKIE.access, access, { ...baseCookie(), maxAge: env.ACCESS_TOKEN_TTL_SEC * 1000 });
-  res.cookie(COOKIE.refresh, s.refreshToken, { ...baseCookie(), maxAge: env.REFRESH_IDLE_TTL_SEC * 1000 });
+  }, policy.accessTokenTtlSec);
+  res.cookie(COOKIE.access, access, { ...baseCookie(), maxAge: policy.accessTokenTtlSec * 1000 });
+  res.cookie(COOKIE.refresh, s.refreshToken, { ...baseCookie(), maxAge: policy.idleTimeoutSec * 1000 });
   // Double-submit CSRF token: readable by the SPA, echoed back in X-CSRF-Token.
-  res.cookie(COOKIE.csrf, randomToken(24), { ...baseCookie(), httpOnly: false, maxAge: env.SESSION_ABSOLUTE_TTL_SEC * 1000 });
+  res.cookie(COOKIE.csrf, randomToken(24), { ...baseCookie(), httpOnly: false, maxAge: policy.absoluteTimeoutSec * 1000 });
 }
 
 export function clearAuthCookies(res: Response): void {

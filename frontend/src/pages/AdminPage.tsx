@@ -5,6 +5,7 @@ import { Can, useAuth } from '../auth/AuthContext';
 import { Badge, Card, ErrorBox, PageHeader, Spinner } from '../components/ui';
 import { fmtDateTime, ROLE_LABELS, timeAgo } from '../lib/format';
 import type { Role } from '../lib/types';
+import { IdentityUsers } from '../components/IdentityUsers';
 
 interface UserRow {
   id: string;
@@ -54,7 +55,7 @@ export function AdminPage() {
   const s = system.data;
   return (
     <div className="space-y-6">
-      <PageHeader title="System Management & Users" subtitle="Identities and roles are mastered in the OIDC identity provider; this console provides local kill-switches and health visibility." />
+      <PageHeader title="System Management & Users" subtitle="Enrol identities, assign roles and manage MFA in the identity provider; dashboard accounts are provisioned at first SSO sign-in and can be disabled or have their sessions revoked here." />
 
       <Can permission="system:manage">
         {system.error && <ErrorBox message={system.error} />}
@@ -97,7 +98,9 @@ export function AdminPage() {
         )}
       </Can>
 
-      <Card title={<span className="flex items-center gap-2"><Users className="h-4 w-4" /> Users (provisioned on first SSO login)</span>} bodyClass="p-0">
+      <IdentityUsers />
+
+      <Card title={<span className="flex items-center gap-2"><Users className="h-4 w-4" /> Dashboard accounts (provisioned on first SSO login)</span>} bodyClass="p-0">
         {users.error && <ErrorBox message={users.error} />}
         {!users.data ? <Spinner /> : (
           <table className="table-base">

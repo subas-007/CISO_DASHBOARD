@@ -6,11 +6,11 @@ import type { RoleKey } from './support/global-setup';
 /** Independent statement of the RBAC policy (README table) — must match the server. */
 const ALL = ['dashboard:read', 'kpi:read', 'kri:read', 'risk:read', 'threat:read', 'incident:read', 'vuln:read'];
 const EXPECTED: Record<string, string[]> = {
-  ciso: [...ALL, 'kri:acknowledge', 'parameters:manage', 'risk:write', 'risk:acceptance:request', 'risk:acceptance:approve', 'threat:triage', 'integration:read', 'users:read', 'audit:read', 'compliance:read'],
-  admin: [...ALL, 'kri:acknowledge', 'parameters:manage', 'integration:read', 'integration:manage', 'users:read', 'users:manage', 'system:manage', 'audit:read', 'compliance:read'],
+  ciso: [...ALL, 'kri:acknowledge', 'parameters:manage', 'risk:write', 'risk:acceptance:request', 'risk:acceptance:approve', 'threat:triage', 'integration:read', 'users:read', 'audit:read', 'compliance:read', 'config:read'],
+  admin: [...ALL, 'kri:acknowledge', 'parameters:manage', 'integration:read', 'integration:manage', 'users:read', 'users:manage', 'system:manage', 'audit:read', 'compliance:read', 'config:read'],
   secops: [...ALL, 'kri:acknowledge', 'risk:write', 'risk:acceptance:request', 'threat:triage', 'incident:write', 'integration:read', 'integration:manage'],
   patch: [...ALL, 'risk:acceptance:request', 'remediation:write', 'change:link'],
-  auditor: [...ALL, 'audit:read', 'compliance:read'],
+  auditor: [...ALL, 'audit:read', 'compliance:read', 'config:read'],
 };
 const APP_ROLE: Record<string, string> = { ciso: 'CISO', admin: 'ADMIN', secops: 'SECOPS', patch: 'PATCH_ADMIN', auditor: 'AUDITOR' };
 

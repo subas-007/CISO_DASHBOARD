@@ -293,7 +293,8 @@ test.describe('Administration', () => {
     await expect(admin.page.getByText('mtlsFromGateway')).toBeVisible();
     const ciso = await as('ciso');
     await ciso.page.goto('/admin');
-    await expect(ciso.page.getByText('Users (provisioned on first SSO login)')).toBeVisible();
+    await expect(ciso.page.getByText('Dashboard accounts (provisioned on first SSO login)')).toBeVisible();
+    await expect(ciso.page.getByRole('button', { name: 'Enrol user' })).toHaveCount(0); // CISO: read-only identities
     await expect(ciso.page.getByRole('button', { name: /disable|revoke sessions/i })).toHaveCount(0);
     await expect(ciso.page.getByText('Database', { exact: true })).toHaveCount(0);
   });

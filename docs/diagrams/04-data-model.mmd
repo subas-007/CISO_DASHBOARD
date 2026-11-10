@@ -32,6 +32,7 @@ erDiagram
         enum authMode
         int pollIntervalSec
         json settings
+        json requestOptions "path prefix, headers, query, timeout, retries"
         string secretEnc "AES-256-GCM, AAD=connector id"
         enum status
     }

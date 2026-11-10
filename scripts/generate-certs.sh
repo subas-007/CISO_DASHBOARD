@@ -4,6 +4,10 @@
 # with certificates from your enterprise PKI (same file names).
 #
 #   usage: scripts/generate-certs.sh [public-hostname] [extra-ip]
+#          CERT_SANS=10.20.5.15,ciso.corp.example FORCE=1 scripts/generate-certs.sh ciso.corp.example
+#
+# With FORCE=1 and an existing certs/ca.key, only the service certificate is re-issued
+# (browsers that already trust the CA keep working). Set NEW_CA=1 to replace the CA too.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export MSYS_NO_PATHCONV=1 # Git Bash on Windows: keep "/O=..." subjects intact
@@ -19,9 +23,21 @@ if [[ -f "$OUT/tls.crt" && "${FORCE:-}" != "1" ]]; then
   exit 1
 fi
 
-SAN="DNS:localhost,DNS:gateway,DNS:api,DNS:keycloak,DNS:postgres,IP:127.0.0.1"
-[[ "$HOST" != "localhost" ]] && SAN="DNS:${HOST},${SAN}"
-[[ -n "$EXTRA_IP" ]] && SAN="${SAN},IP:${EXTRA_IP}"
+declare -A SEEN=()
+SAN=""
+add_san() {
+  local v="$1"
+  [[ -z "$v" || -n "${SEEN[$v]:-}" ]] && return 0
+  SEEN[$v]=1
+  if [[ "$v" =~ ^[0-9]+(\.[0-9]+){3}$ || ( "$v" == *:* && "$v" =~ ^[0-9A-Fa-f:]+$ ) ]]; then SAN="${SAN:+$SAN,}IP:$v"
+  elif [[ "$v" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]]; then SAN="${SAN:+$SAN,}DNS:$v"
+  else echo "Ignoring invalid certificate name: $v" >&2
+  fi
+}
+add_san "$HOST"
+for n in localhost gateway api keycloak postgres 127.0.0.1 "$EXTRA_IP"; do add_san "$n"; done
+IFS=',' read -r -a EXTRA <<< "${CERT_SANS:-}"
+for n in "${EXTRA[@]}"; do add_san "$(echo "$n" | tr -d '[:space:]')"; done
 
 # Private CA (P-384)
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-384 -out "$OUT/ca.key"

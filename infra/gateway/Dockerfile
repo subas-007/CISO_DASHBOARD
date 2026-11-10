@@ -16,6 +16,8 @@ RUN apk upgrade --no-cache && rm -f /etc/nginx/conf.d/default.conf
 COPY infra/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY infra/nginx/security-headers.conf /etc/nginx/security-headers.conf
 COPY infra/nginx/proxy-api.conf /etc/nginx/proxy-api.conf
+COPY infra/nginx/proxy-api-common.conf /etc/nginx/proxy-api-common.conf
+COPY --chmod=0755 infra/gateway/40-ciso-runtime.sh /docker-entrypoint.d/40-ciso-runtime.sh
 COPY infra/nginx/proxy-idp.conf /etc/nginx/proxy-idp.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 RUN chmod -R a=rX /usr/share/nginx/html /etc/nginx

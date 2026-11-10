@@ -9,6 +9,9 @@ const bool = z
   .enum(['true', 'false', '1', '0'])
   .transform((v) => v === 'true' || v === '1');
 
+/** Optional value where an empty string (unset compose interpolation) means "absent". */
+const opt = <T extends z.ZodTypeAny>(schema: T) => z.preprocess((v) => (v === '' ? undefined : v), schema.optional());
+
 const base64Key32 = z
   .string()
   .refine((v) => Buffer.from(v, 'base64').length === 32, 'must be 32 bytes, base64 encoded');
@@ -67,6 +70,31 @@ const EnvSchema = z.object({
   CONNECTOR_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300_000).default(60_000),
 
   SCHEDULER_ENABLED: bool.default('true'),
+  // Running deployment profile (non-secret; passed by compose) — used to detect drift
+  // between the administrator's desired deployment parameters and what is running.
+  DEPLOY_HTTPS_PORT: opt(z.coerce.number().int()),
+  DEPLOY_HTTP_PORT: opt(z.coerce.number().int()),
+  DEPLOY_CERT_SANS: opt(z.string()),
+  DEPLOY_TRUSTED_PROXIES: opt(z.string()),
+  DEPLOY_EDGE_RPS: opt(z.coerce.number().int()),
+  DEPLOY_EDGE_AUTH_RPS: opt(z.coerce.number().int()),
+
+  // Demo profile: enables the live demo-data simulator and dataset regeneration.
+  DEMO_MODE: bool.default('false'),
+
+  // Identity provider administration (Keycloak admin REST API) for enrolment and
+  // MFA / password policy management. Optional: leave unset for external IdPs
+  // (Entra ID, Okta, Ping) where enrolment is managed in the IdP itself.
+  IDP_ADMIN_URL: opt(z.string().url()),
+  IDP_REALM: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).default('ciso'),
+  IDP_PROVISIONER_CLIENT_ID: z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/).default('ciso-provisioner'),
+  IDP_PROVISIONER_CLIENT_SECRET: opt(z.string().min(16)),
+  // One-shot bootstrap (idp-init) only
+  IDP_BOOTSTRAP_ADMIN_USERNAME: opt(z.string()),
+  IDP_BOOTSTRAP_ADMIN_PASSWORD: opt(z.string()),
+  DEMO_ADMIN_USERNAME: opt(z.string().regex(/^[a-z0-9._-]{3,64}$/)),
+  DEMO_ADMIN_PASSWORD: opt(z.string().min(8).max(128)),
+
   RATE_LIMIT_PER_MIN: z.coerce.number().int().min(10).default(3000),
   RATE_LIMIT_PER_USER_MIN: z.coerce.number().int().min(10).default(600),
 });

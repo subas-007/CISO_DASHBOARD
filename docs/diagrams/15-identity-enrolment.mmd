@@ -1,0 +1,23 @@
+sequenceDiagram
+    autonumber
+    actor Admin as Administrator
+    participant UI as Dashboard (System and Users)
+    participant API as API (identity routes)
+    participant KC as Keycloak (admin REST)
+    actor User as New user
+    Admin->>UI: Enrol user (username, email, name, roles)
+    UI->>API: POST /api/admin/identity/users
+    API->>API: RBAC users:manage · Zod validation
+    API->>API: CSPRNG one-time password meeting policy
+    API->>KC: create user (UPDATE_PASSWORD + CONFIGURE_TOTP, temporary password)
+    API->>KC: map realm roles (rollback on failure)
+    API->>API: audit identity.user.enrol (no secrets)
+    API-->>UI: one-time password (shown once, never stored)
+    Admin-->>User: share password over a separate channel
+    User->>KC: sign in with one-time password
+    KC-->>User: set new password (policy enforced)
+    KC-->>User: Mobile Authenticator setup (QR, HmacSHA1, 6 digits, 30 s)
+    User->>KC: TOTP code from Google or Microsoft Authenticator
+    KC-->>API: authorization code (PKCE) and roles claim
+    API-->>User: dashboard session (role-scoped)
+    Note over Admin,API: Later: change roles, reset MFA or password, disable, delete — each audited, revoking live sessions when access is reduced

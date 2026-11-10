@@ -88,10 +88,11 @@ export interface NormalizedBatch {
 export interface FieldSpec {
   key: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'textarea';
+  type: 'string' | 'number' | 'boolean' | 'textarea' | 'select';
   required?: boolean;
   placeholder?: string;
   help?: string;
+  options?: { value: string | number; label: string }[];
 }
 
 export interface AdapterContext {

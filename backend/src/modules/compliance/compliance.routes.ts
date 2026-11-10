@@ -3,7 +3,7 @@
  * NIST SP 800-53 Rev.5 AU family and PCI DSS v4.0.1 Requirement 10, with live evidence.
  */
 import { Router } from 'express';
-import { env } from '../../config/env.js';
+import { getSetting } from '../settings/settings.service.js';
 import { requirePermission } from '../../auth/middleware.js';
 import { audit, auditContext, verifyAuditChain } from '../../audit/audit.service.js';
 import { activeEncryptionKeyId } from '../../lib/crypto.js';
@@ -24,6 +24,8 @@ complianceRouter.get('/report', requirePermission('compliance:read'), async (req
     prisma.auditLog.findFirst({ orderBy: { id: 'asc' }, select: { ts: true } }),
   ]);
 
+  const sp = await getSetting('sessionPolicy');
+  const idp = await getSetting('identity');
   const controls = [
     { framework: 'NIST 800-53', id: 'AU-2', title: 'Event logging', status: 'IMPLEMENTED', evidence: `Authentication, admin, configuration, risk acceptance and access-denied events logged (${authEvents} auth events / 90d).` },
     { framework: 'NIST 800-53', id: 'AU-3', title: 'Content of audit records', status: 'IMPLEMENTED', evidence: 'Each record: timestamp (UTC, ms), actor id/name/roles, action, target, outcome, source IP, user agent, details.' },
@@ -37,7 +39,9 @@ complianceRouter.get('/report', requirePermission('compliance:read'), async (req
     { framework: 'PCI DSS 4.0.1', id: '10.2.2', title: 'Audit log content', status: 'IMPLEMENTED', evidence: 'User identity, event type, date/time, success/failure, origination, affected resource recorded.' },
     { framework: 'PCI DSS 4.0.1', id: '10.3.2', title: 'Audit logs protected from modification', status: chain.valid ? 'IMPLEMENTED' : 'FAILED', evidence: 'Immutable table + HMAC-SHA256 chain verification.' },
     { framework: 'PCI DSS 4.0.1', id: '10.3.4', title: 'Integrity monitoring of logs', status: 'IMPLEMENTED', evidence: 'On-demand and report-time chain verification; verification runs are audited.' },
-    { framework: 'PCI DSS 4.0.1', id: '8.2.8', title: 'Idle session timeout ≤ 15 min', status: env.REFRESH_IDLE_TTL_SEC <= 900 ? 'IMPLEMENTED' : 'PARTIAL', evidence: `Access token ${env.ACCESS_TOKEN_TTL_SEC}s, refresh idle ${env.REFRESH_IDLE_TTL_SEC}s, absolute ${env.SESSION_ABSOLUTE_TTL_SEC}s.` },
+    { framework: 'PCI DSS 4.0.1', id: '8.2.8', title: 'Idle session timeout ≤ 15 min', status: sp.idleTimeoutSec <= 900 ? 'IMPLEMENTED' : 'PARTIAL', evidence: `Access token ${sp.accessTokenTtlSec}s, refresh idle ${sp.idleTimeoutSec}s, absolute ${sp.absoluteTimeoutSec}s (administrator-defined, synchronised to the IdP).` },
+    { framework: 'PCI DSS 4.0.1', id: '8.3.6', title: 'Password length ≥ 12 with complexity', status: idp.passwordMinLength >= 12 ? 'IMPLEMENTED' : 'PARTIAL', evidence: `IdP policy: minimum ${idp.passwordMinLength} characters, history ${idp.passwordHistory}, lockout after ${idp.lockoutMaxFailures} failures.` },
+    { framework: 'PCI DSS 4.0.1', id: '8.4.2', title: 'MFA for all access', status: idp.mfaRequired ? 'IMPLEMENTED' : 'FAILED', evidence: idp.mfaRequired ? `TOTP (${idp.otpAlgorithm}, ${idp.otpDigits} digits / ${idp.otpPeriodSec}s) enforced at sign-in for every user.` : 'MFA enforcement disabled by an administrator.' },
     { framework: 'PCI DSS 4.0.1', id: '3.5.1', title: 'Stored sensitive data rendered unreadable', status: 'IMPLEMENTED', evidence: `AES-256-GCM field encryption, active key "${activeEncryptionKeyId()}"; HMAC blind indexes for lookups.` },
     { framework: 'PCI DSS 4.0.1', id: '4.2.1', title: 'Strong cryptography in transit', status: 'IMPLEMENTED', evidence: 'TLS 1.3 only at gateway with HSTS; mTLS gateway→API; TLS to PostgreSQL and IdP.' },
   ];

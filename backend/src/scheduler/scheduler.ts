@@ -8,6 +8,9 @@ import { publish } from '../lib/events.js';
 import { syncConnector } from '../connectors/runner.js';
 import { captureSnapshot, evaluateKris } from '../modules/kpi/kpi.service.js';
 import { getSetting } from '../modules/settings/settings.service.js';
+import { applyLiveSettings } from '../modules/config/apply.js';
+import { idpConfigured, idpSyncState, syncIdentityPolicy } from '../idp/identity.service.js';
+import { maybeSimulate } from '../demo/simulator.js';
 
 const LEASE_MS = 15 * 60_000;
 const timers: NodeJS.Timeout[] = [];
@@ -89,6 +92,15 @@ export function startScheduler(): void {
     schedulerState.lastKriEvaluation = new Date();
   }, true);
   every(60 * 60_000, 'housekeeping', housekeeping, true);
+  // Converge live settings changed on another replica.
+  every(30_000, 'live-settings', applyLiveSettings);
+  // Re-apply the identity policy: retry quickly after a failure, otherwise hourly drift correction.
+  every(5 * 60_000, 'idp-policy', async () => {
+    if (!idpConfigured()) return;
+    const stale = !idpSyncState.lastSuccessAt || Date.now() - idpSyncState.lastSuccessAt.getTime() > 60 * 60_000;
+    if (idpSyncState.ok === false || stale) await syncIdentityPolicy();
+  });
+  every(15_000, 'demo-simulator', maybeSimulate);
   logger.info('scheduler started');
 }
 

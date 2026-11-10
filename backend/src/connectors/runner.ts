@@ -11,6 +11,7 @@ import { EgressPolicyError } from './egress.js';
 import { ConnectorError, ConnectorHttpClient } from './httpClient.js';
 import { ingestBatch, type IngestCounts } from './ingest.js';
 import { getAdapter } from './registry.js';
+import { DEFAULT_REQUEST_OPTIONS, RequestOptionsSchema } from './requestOptions.js';
 import type { Credentials, NormalizedBatch } from './types.js';
 
 export const credentialAad = (connectorId: string) => `connector:${connectorId}:credentials`;
@@ -36,7 +37,8 @@ function buildClient(connector: Connector) {
   if (!adapter) throw new ConnectorError(`Unknown connector vendor "${connector.vendor}"`);
   const creds: Credentials = connector.secretEnc ? decryptJson<Credentials>(connector.secretEnc, credentialAad(connector.id)) : {};
   const baseUrl = new URL(connector.baseUrl);
-  const http = new ConnectorHttpClient(baseUrl, connector.authMode, creds, adapter.apiKeyHeaders);
+  const opts = RequestOptionsSchema.safeParse(connector.requestOptions ?? {});
+  const http = new ConnectorHttpClient(baseUrl, connector.authMode, creds, adapter.apiKeyHeaders, opts.success ? opts.data : DEFAULT_REQUEST_OPTIONS);
   return { adapter, http, baseUrl };
 }
 

@@ -33,6 +33,7 @@ services:
           - taxii.sim.test
           - intel.sim.test
           - kev.sim.test
+          - generic.sim.test
           - redirect.sim.test
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('net').connect(8443,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))\""]

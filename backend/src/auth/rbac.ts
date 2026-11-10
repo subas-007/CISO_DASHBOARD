@@ -43,6 +43,7 @@ export const PERMISSIONS = {
   'users:read': ['ADMIN', 'CISO'],
   'users:manage': ['ADMIN'],
   'system:manage': ['ADMIN'],
+  'config:read': ['ADMIN', 'CISO', 'AUDITOR'],
 
   'audit:read': ['AUDITOR', 'ADMIN', 'CISO'],
   'compliance:read': ['AUDITOR', 'CISO', 'ADMIN'],

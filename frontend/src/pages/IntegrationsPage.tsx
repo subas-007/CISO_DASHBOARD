@@ -258,6 +258,34 @@ function ConnectorModal({ catalog, existing, onClose, onSaved }: { catalog: Cata
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const ro = existing?.requestOptions ?? {};
+  const [pathPrefix, setPathPrefix] = useState(ro.pathPrefix ?? '');
+  const [headersText, setHeadersText] = useState(Object.entries(ro.headers ?? {}).map(([k, v]) => `${k}: ${v}`).join('\n'));
+  const [queryText, setQueryText] = useState(Object.entries(ro.query ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'));
+  const [timeoutMs, setTimeoutMs] = useState(ro.timeoutMs ? String(ro.timeoutMs) : '');
+  const [maxRetries, setMaxRetries] = useState(ro.maxRetries !== undefined ? String(ro.maxRetries) : '');
+
+  const requestOptions = () => {
+    const pairs = (text: string, sep: RegExp) =>
+      Object.fromEntries(
+        text
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean)
+          .map((l) => {
+            const m = sep.exec(l);
+            if (!m) throw new Error(`Cannot parse "${l}"`);
+            return [m[1]!.trim(), m[2]!.trim()];
+          }),
+      );
+    return {
+      pathPrefix: pathPrefix.trim(),
+      headers: pairs(headersText, /^([^:]+):(.*)$/),
+      query: pairs(queryText, /^([^=]+)=(.*)$/),
+      ...(timeoutMs ? { timeoutMs: Number(timeoutMs) } : {}),
+      ...(maxRetries !== '' ? { maxRetries: Number(maxRetries) } : {}),
+    };
+  };
 
   const pickVendor = (v: string) => {
     const s = catalog.find((c) => c.vendor === v)!;
@@ -273,18 +301,23 @@ function ConnectorModal({ catalog, existing, onClose, onSaved }: { catalog: Cata
     Object.fromEntries(
       Object.entries(settings)
         .filter(([, v]) => v !== '' && v !== undefined)
-        .map(([k, v]) => [k, spec.settingsFields.find((f) => f.key === k)?.type === 'number' ? Number(v) : v]),
+        .map(([k, v]) => {
+          const f = spec.settingsFields.find((x) => x.key === k);
+          const numeric = f?.type === 'number' || (f?.type === 'select' && typeof f.options?.[0]?.value === 'number');
+          return [k, numeric ? Number(v) : v];
+        }),
     );
 
   const save = async () => {
     setBusy(true);
     setError(null);
     try {
+      const opts = requestOptions();
       if (existing) {
-        await api(`/integrations/${existing.id}`, { method: 'PATCH', body: { baseUrl, authMode, pollIntervalSec: pollMin * 60, enabled, settings: cleanSettings() } });
+        await api(`/integrations/${existing.id}`, { method: 'PATCH', body: { baseUrl, authMode, pollIntervalSec: pollMin * 60, enabled, settings: cleanSettings(), requestOptions: opts } });
         if (Object.keys(compact(creds)).length) await api(`/integrations/${existing.id}/credentials`, { method: 'PUT', body: { credentials: compact(creds) } });
       } else {
-        await api('/integrations', { method: 'POST', body: { name, vendor, baseUrl, authMode, pollIntervalSec: pollMin * 60, enabled, settings: cleanSettings(), credentials: compact(creds) } });
+        await api('/integrations', { method: 'POST', body: { name, vendor, baseUrl, authMode, pollIntervalSec: pollMin * 60, enabled, settings: cleanSettings(), requestOptions: opts, credentials: compact(creds) } });
       }
       setCreds({});
       onSaved();
@@ -345,6 +378,10 @@ function ConnectorModal({ catalog, existing, onClose, onSaved }: { catalog: Cata
                 <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={f.help}>
                   {f.type === 'textarea' ? (
                     <textarea className="input font-mono text-xs" placeholder={f.placeholder} value={String(settings[f.key] ?? '')} onChange={(e) => setSettings({ ...settings, [f.key]: e.target.value })} />
+                  ) : f.type === 'select' ? (
+                    <select className="input" value={String(settings[f.key] ?? f.options?.[0]?.value ?? '')} onChange={(e) => setSettings({ ...settings, [f.key]: e.target.value })}>
+                      {f.options?.map((o) => <option key={String(o.value)} value={String(o.value)}>{o.label}</option>)}
+                    </select>
                   ) : (
                     <input className="input" type={f.type === 'number' ? 'number' : 'text'} placeholder={f.placeholder} value={String(settings[f.key] ?? '')} onChange={(e) => setSettings({ ...settings, [f.key]: e.target.value })} />
                   )}
@@ -363,6 +400,29 @@ function ConnectorModal({ catalog, existing, onClose, onSaved }: { catalog: Cata
             <Notice>Credentials are stored encrypted and never displayed. Leave blank to keep them; enter values to replace them.</Notice>
           )}
           <CredentialInputs mode={authMode} value={creds} onChange={setCreds} />
+          <details className="rounded-lg border border-surface-700 p-3" open={!!(ro.pathPrefix || Object.keys(ro.headers ?? {}).length || Object.keys(ro.query ?? {}).length)}>
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-400">Advanced API parameters</summary>
+            <div className="mt-3 space-y-3">
+              <p className="text-xs text-slate-500">Adapt the connector to the vendor's API standard without code: API-gateway path prefix, version headers (e.g. QRadar <code>Version</code>, Elastic <code>elastic-api-version</code>), tenant parameters, timeout and retries. Never put secrets here — use the credential fields.</p>
+              <Field label="Path prefix" hint="Prepended to every API path, e.g. /gateway/splunk">
+                <input className="input font-mono" value={pathPrefix} onChange={(e) => setPathPrefix(e.target.value)} placeholder="/gw" />
+              </Field>
+              <Field label="Extra request headers" hint="One per line: Name: value">
+                <textarea className="input min-h-16 font-mono text-xs" spellCheck={false} value={headersText} onChange={(e) => setHeadersText(e.target.value)} placeholder="X-Api-Version: 2" />
+              </Field>
+              <Field label="Extra query parameters" hint="One per line: name=value">
+                <textarea className="input min-h-16 font-mono text-xs" spellCheck={false} value={queryText} onChange={(e) => setQueryText(e.target.value)} placeholder="tenant=emea" />
+              </Field>
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Timeout (ms)" hint="Blank = platform default">
+                  <input className="input" type="number" min={1000} max={300000} value={timeoutMs} onChange={(e) => setTimeoutMs(e.target.value)} />
+                </Field>
+                <Field label="Retries" hint="429 / 5xx / network">
+                  <input className="input" type="number" min={0} max={5} value={maxRetries} onChange={(e) => setMaxRetries(e.target.value)} />
+                </Field>
+              </div>
+            </div>
+          </details>
         </div>
       </div>
     </Modal>

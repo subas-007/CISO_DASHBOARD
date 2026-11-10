@@ -14,16 +14,16 @@
 
 | # | Risk | Mitigations in this codebase |
 |---|------|------------------------------|
-| A01 | Broken Access Control | Deny-by-default `authenticate` on all `/api`; per-route `requirePermission` ([rbac.ts](../backend/src/auth/rbac.ts)); SoD for risk approval; server-side session validation per request; denials audited |
+| A01 | Broken Access Control | Deny-by-default `authenticate` on all `/api`; administrator-defined source-network allowlists (API + gateway `auth_request`, self-lockout prevented); per-route `requirePermission` ([rbac.ts](../backend/src/auth/rbac.ts)); SoD for risk approval; server-side session validation per request; denials audited |
 | A02 | Cryptographic Failures | TLS 1.3 only (gateway, API, Keycloak, PostgreSQL); HSTS preload; AES-256-GCM field encryption with key ring; HMAC blind indexes; refresh tokens stored as SHA-256 only |
-| A03 | Injection | Prisma parameterised queries (raw SQL only via tagged templates); Zod `.strict()` validation; no shell execution; XML entity expansion disabled; CSV-formula neutralisation in exports; React output encoding, no `dangerouslySetInnerHTML` |
+| A03 | Injection | Prisma parameterised queries (raw SQL only via tagged templates); Zod `.strict()` validation; no shell execution (deployment / host artefacts are generated from strictly validated IP/CIDR/hostname values, shell-quoted, and applied by an operator — the web tier never executes on the host); `apply-deployment.sh` parses (never sources) a whitelisted, checksummed profile; XML entity expansion disabled; CSV-formula neutralisation in exports; React output encoding, no `dangerouslySetInnerHTML` |
 | A04 | Insecure Design | Threat-modelled flows (see [FLOWCHARTS.md](FLOWCHARTS.md)); fail-closed audit; segregation of duties; zero data retention for third-party payloads |
 | A05 | Security Misconfiguration | Startup refuses insecure prod settings; strict CSP / XFO / nosniff / Referrer-Policy / COOP / CORP; no stack traces in responses; non-root, read-only containers with `cap_drop: ALL` |
 | A06 | Vulnerable Components | Pinned major versions with lockfiles; `npm ci --ignore-scripts`; minimal Alpine images with `apk upgrade`; npm removed from runtime image |
-| A07 | Identification & Authentication Failures | OIDC + PKCE + nonce; IdP MFA (TOTP forced), password policy, brute-force lockout; 10-min access tokens; 15-min idle / 8-h absolute session; continuous IdP re-verification on refresh |
+| A07 | Identification & Authentication Failures | OIDC + PKCE + nonce; IdP MFA (TOTP enforced for every identity, HmacSHA1 for authenticator-app compatibility), administrator-defined password / lockout policy synchronised to the IdP; enrolment with CSPRNG one-time passwords shown once; no self-modification and last-administrator protection; 10-min access tokens; 15-min idle / 8-h absolute session; continuous IdP re-verification on refresh |
 | A08 | Software & Data Integrity Failures | Audit hash chain; signed/encrypted tokens (HS512 JWT, JWE state); lifecycle scripts disabled during install |
 | A09 | Security Logging & Monitoring Failures | Immutable audit for auth, admin, config, risk, access-denied events; JSON structured logs with redaction; KRI breach register; Keycloak login/admin events enabled |
-| A10 | SSRF | Connector URL policy (https only, allowlist, denied hosts, no userinfo), connect-time DNS/IP verification (anti-rebinding), metadata/loopback/link-local/internal CIDRs blocked, redirects not followed, response size caps |
+| A10 | SSRF | Connector URL policy (https only, allowlist, denied hosts, no userinfo), connect-time DNS/IP verification (anti-rebinding), metadata/loopback/link-local/internal CIDRs blocked, redirects not followed, response size caps; administrator-defined allowlist/denylist can only extend the environment floor; per-connector API parameters reject credential-like, hop-by-hop and routing headers and dot-segment path prefixes |
 
 ## 3. NIST SP 800-53 Rev.5 (AU family) & PCI DSS v4.0.1 Requirement 10
 
@@ -75,6 +75,9 @@ Backups (`pg_dump`) must be encrypted too (e.g. `age`, `gpg --cipher-algo AES256
 
 ## 5. Secrets management
 
+* Least-privilege identity administration: the API uses the `ciso-provisioner` service account (realm-management view/manage users, query users, view/manage realm — no client management, no master realm). Only the one-shot `idp-init` job receives the Keycloak bootstrap administrator password, as a Docker secret.
+* **Demo profile only:** the demo administrator `admin` / `Admin@123!` is a *published* credential created at the user's request for demonstrations. It is not created when `SEED_DEMO_DATA=false`, MFA enrolment is still enforced, and `idp-init` logs a warning when the public URL is not local. Delete or disable it (System & Users) before exposing a demo instance.
+
 * No secrets in source control: `.env`, `secrets/`, `certs/` are git-ignored; `.env.example` contains placeholders only.
 * `scripts/generate-secrets.sh` creates every secret from a CSPRNG (`openssl rand`), mode `600`.
 * The API receives secrets as **files** (`*_FILE`, Docker secrets) — not environment values visible in `docker inspect` — and scrubs them from `process.env` after loading.
@@ -90,7 +93,10 @@ Backups (`pg_dump`) must be encrypted too (e.g. `age`, `gpg --cipher-algo AES256
 
 - [ ] Replace `certs/` with enterprise-PKI certificates; move `ca.key` offline.
 - [ ] Point `OIDC_*` at the corporate IdP (Entra ID / Okta / Ping) **or** remove demo users from `infra/keycloak/realm-ciso.json`; map IdP groups via `OIDC_ROLE_MAPPING`.
-- [ ] Set `SEED_DEMO_DATA=false`.
+- [ ] Set `SEED_DEMO_DATA=false` (no demo administrator, no simulator) — or at least delete the `admin` demo account.
+- [ ] Configuration → Network access: restrict client and admin-console networks.
+- [ ] Configuration → Identity: keep MFA required and HmacSHA1; password length ≥ 12; run *Enforce MFA for existing users*.
+- [ ] Configuration → Host operating system: apply the baseline script (NTP, syslog to SIEM over TLS, edge firewall, auditd, updates).
 - [ ] Encrypt the PostgreSQL volume (LUKS2) and backups.
 - [ ] Configure `CONNECTOR_ALLOWED_HOSTS` to the exact tool endpoints; consider `CONNECTOR_BLOCK_PRIVATE_NETWORKS=true` if all tools are SaaS.
 - [ ] Host firewall: allow only 443 (and 80 for redirect) inbound — `ufw allow 443/tcp` / `firewall-cmd --add-service=https --permanent`.

@@ -7,6 +7,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import type { AuthMode, Connector, Prisma } from '@prisma/client';
 import { env } from '../../config/env.js';
+import { getSetting } from '../settings/settings.service.js';
+import { RequestOptionsSchema } from '../../connectors/requestOptions.js';
 import { requirePermission } from '../../auth/middleware.js';
 import { audit, auditContext, writeAudit } from '../../audit/audit.service.js';
 import { decryptJson, encryptJson } from '../../lib/crypto.js';
@@ -15,7 +17,7 @@ import { publish } from '../../lib/events.js';
 import { prisma } from '../../lib/prisma.js';
 import { IdParam, singleLine } from '../../lib/validation.js';
 import { heavyRateLimit } from '../../security/rateLimit.js';
-import { assertUrlAllowed, EgressPolicyError } from '../../connectors/egress.js';
+import { assertUrlAllowed, egressPolicy, EgressPolicyError } from '../../connectors/egress.js';
 import { getAdapter, listAdapters, VENDORS } from '../../connectors/registry.js';
 import { credentialAad, syncConnector, testConnector } from '../../connectors/runner.js';
 import type { Credentials } from '../../connectors/types.js';
@@ -90,7 +92,9 @@ function present(c: Connector) {
   return { ...rest, hasCredentials: !!c.secretEnc, credentialFields };
 }
 
-integrationsRouter.get('/catalog', requirePermission('integration:read'), (_req, res) => {
+integrationsRouter.get('/catalog', requirePermission('integration:read'), async (_req, res) => {
+  const policy = egressPolicy();
+  const defaults = await getSetting('connectorDefaults');
   res.json({
     items: listAdapters().map((a) => ({
       vendor: a.vendor,
@@ -104,9 +108,12 @@ integrationsRouter.get('/catalog', requirePermission('integration:read'), (_req,
     })),
     egressPolicy: {
       httpsOnly: !env.CONNECTOR_ALLOW_INSECURE_HTTP,
-      allowlist: env.CONNECTOR_ALLOWED_HOSTS ? env.CONNECTOR_ALLOWED_HOSTS.split(',').map((s) => s.trim()) : [],
-      privateNetworksBlocked: env.CONNECTOR_BLOCK_PRIVATE_NETWORKS,
+      allowlist: policy.allowedHosts,
+      privateNetworksBlocked: policy.blockPrivateNetworks,
+      timeoutMs: policy.timeoutMs,
+      maxRetries: policy.maxRetries,
     },
+    defaults: { pollIntervalSec: defaults.defaultPollSec },
   });
 });
 
@@ -126,6 +133,7 @@ const ConnectorCreate = z
     pollIntervalSec: z.number().int().min(60).max(86_400),
     enabled: z.boolean().default(false),
     settings: settingsJson,
+    requestOptions: RequestOptionsSchema.default({}),
     credentials: CredentialsSchema.default({}),
   })
   .strict();
@@ -152,6 +160,7 @@ integrationsRouter.post('/', requirePermission('integration:manage'), async (req
         enabled: body.enabled,
         status: body.enabled ? 'UNTESTED' : 'DISABLED',
         settings,
+        requestOptions: body.requestOptions as Prisma.InputJsonValue,
         secretEnc: Object.keys(body.credentials).length ? encryptJson(body.credentials, credentialAad(id)) : null,
         createdById: req.auth!.userId,
         updatedById: req.auth!.userId,
@@ -163,7 +172,7 @@ integrationsRouter.post('/', requirePermission('integration:manage'), async (req
       outcome: 'SUCCESS',
       targetType: 'connector',
       targetId: id,
-      details: { name: c.name, vendor: c.vendor, baseUrl: c.baseUrl, authMode: c.authMode, credentialFields: Object.keys(body.credentials) },
+      details: { name: c.name, vendor: c.vendor, baseUrl: c.baseUrl, authMode: c.authMode, requestOptions: body.requestOptions, credentialFields: Object.keys(body.credentials) },
     });
     return c;
   });
@@ -178,6 +187,7 @@ const ConnectorUpdate = z
     pollIntervalSec: z.number().int().min(60).max(86_400).optional(),
     enabled: z.boolean().optional(),
     settings: settingsJson.optional(),
+    requestOptions: RequestOptionsSchema.optional(),
   })
   .strict();
 
@@ -195,12 +205,13 @@ integrationsRouter.patch('/:id', requirePermission('integration:manage'), async 
   }
   if (body.pollIntervalSec) data.pollIntervalSec = body.pollIntervalSec;
   if (body.settings) data.settings = adapter.settingsSchema.parse(body.settings) as Prisma.InputJsonValue;
+  if (body.requestOptions) data.requestOptions = body.requestOptions as Prisma.InputJsonValue;
   if (body.enabled !== undefined) {
     data.enabled = body.enabled;
     data.status = body.enabled ? 'UNTESTED' : 'DISABLED';
   }
   // Changing the endpoint or auth mode invalidates the health state.
-  if (body.baseUrl || body.authMode) data.status = 'UNTESTED';
+  if (body.baseUrl || body.authMode || body.requestOptions) data.status = (body.enabled ?? before.enabled) ? 'UNTESTED' : 'DISABLED';
 
   const updated = await prisma.$transaction(async (tx) => {
     const c = await tx.connector.update({ where: { id }, data });
@@ -212,8 +223,8 @@ integrationsRouter.patch('/:id', requirePermission('integration:manage'), async 
       targetId: id,
       details: {
         changed: Object.keys(body),
-        before: { baseUrl: before.baseUrl, authMode: before.authMode, pollIntervalSec: before.pollIntervalSec, enabled: before.enabled, settings: before.settings },
-        after: { baseUrl: c.baseUrl, authMode: c.authMode, pollIntervalSec: c.pollIntervalSec, enabled: c.enabled, settings: c.settings },
+        before: { baseUrl: before.baseUrl, authMode: before.authMode, pollIntervalSec: before.pollIntervalSec, enabled: before.enabled, settings: before.settings, requestOptions: before.requestOptions },
+        after: { baseUrl: c.baseUrl, authMode: c.authMode, pollIntervalSec: c.pollIntervalSec, enabled: c.enabled, settings: c.settings, requestOptions: c.requestOptions },
       },
     });
     return c;

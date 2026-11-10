@@ -12,6 +12,7 @@ import {
   Radar,
   ScrollText,
   Server,
+  Settings2,
   ShieldCheck,
   SlidersHorizontal,
   Siren,
@@ -39,6 +40,7 @@ const NAV = [
   { section: 'Administration', items: [
     { to: '/integrations', label: 'Integrations', icon: Plug, perm: 'integration:read' },
     { to: '/admin', label: 'System & Users', icon: Server, perm: 'users:read' },
+    { to: '/configuration', label: 'Configuration', icon: Settings2, perm: 'config:read' },
   ] },
 ];
 

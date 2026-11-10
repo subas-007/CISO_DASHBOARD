@@ -35,10 +35,13 @@ admin_token() {
 create_user() { # $1 username  $2 realm role
   local tok; tok="$(admin_token)"
   "${CURL[@]}" -o /dev/null -X POST "$BASE/auth/admin/realms/ciso/users" -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' \
-    -d "{\"username\":\"$1\",\"enabled\":true,\"emailVerified\":true,\"email\":\"$1@example.test\",\"firstName\":\"E2E\",\"lastName\":\"$2\",\"credentials\":[{\"type\":\"password\",\"value\":\"$TEST_PW\",\"temporary\":false}]}"
+    -d "{\"username\":\"$1\",\"enabled\":true,\"emailVerified\":true,\"email\":\"$1@example.test\",\"firstName\":\"E2E\",\"lastName\":\"$2\",\"requiredActions\":[],\"credentials\":[{\"type\":\"password\",\"value\":\"$TEST_PW\",\"temporary\":false}]}"
   local id; id="$("${CURL[@]}" "$BASE/auth/admin/realms/ciso/users?username=$1&exact=true" -H "Authorization: Bearer $tok" | sed -E 's/^\[\{"id":"([^"]+)".*/\1/')"
   local role; role="$("${CURL[@]}" "$BASE/auth/admin/realms/ciso/roles/$2" -H "Authorization: Bearer $tok")"
   "${CURL[@]}" -o /dev/null -X POST "$BASE/auth/admin/realms/ciso/users/$id/role-mappings/realm" -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' -d "[$role]"
+  # The realm enforces authenticator enrolment for new identities; exempt these temporary
+  # automation users explicitly (curl cannot complete TOTP enrolment).
+  "${CURL[@]}" -o /dev/null -X PUT "$BASE/auth/admin/realms/ciso/users/$id" -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' -d '{"requiredActions":[]}'
   USER_IDS[$1]="$id"
 }
 
@@ -100,6 +103,19 @@ check "CISO cannot manage integrations" 403 "$(code "$J_CISO" POST /integrations
 check "Admin cannot approve acceptance" 403 "$(code "$J_ADMIN" POST /risk-acceptances/00000000-0000-4000-8000-000000000000/decision '{"decision":"APPROVE","note":"nope!"}')"
 check "SecOps cannot update remediation" 403 "$(code "$J_SEC" PATCH /vulnerabilities/00000000-0000-4000-8000-000000000000 '{"status":"REMEDIATED"}')"
 check "Admin system health" 200 "$(code "$J_ADMIN" GET /admin/system)"
+
+echo "== Dynamic configuration"
+check "Configuration status (auditor read)" 200 "$(code "$J_AUD" GET /admin/config/status)"
+check "Identity policy synchronised" 200 "$(code "$J_ADMIN" POST /admin/identity/sync)"
+body | grep -q '"ok":true' && ok "IdP sync: $(body | grep -oE 'TOTP [A-Za-z0-9/]+')" || bad "IdP sync failed: $(body)"
+check "Auditor cannot change rate limits" 403 "$(code "$J_AUD" PUT /admin/settings/rateLimits '{"value":{}}')"
+check "Unsafe public URL rejected" 400 "$(code "$J_ADMIN" PUT /admin/settings/deployment '{"value":{"publicBaseUrl":"https://x.example/$(reboot)","alternativeNames":[],"httpsPort":443,"httpPort":80,"trustedUpstreamProxies":[],"edgeRatePerSec":50,"edgeAuthRatePerSec":20,"apiMemoryMb":1024,"keycloakMemoryMb":1536,"postgresMemoryMb":2048}}')"
+check "Self-lockout prevented" 400 "$(code "$J_ADMIN" PUT /admin/settings/networkAccess '{"value":{"allowedClientCidrs":["203.0.113.0/24"],"adminConsoleCidrs":[]}}')"
+check "Host baseline script download" 200 "$(code "$J_ADMIN" GET '/admin/config/bundle/host?os=ubuntu')"
+body | bash -n && ok "host script is valid bash" || bad "host script syntax error"
+check "Gateway hides internal endpoints" 404 "$("${CURL[@]}" -o /dev/null -w '%{http_code}' "$BASE/api/internal/ip-gate/app")"
+check "Enrolment lists IdP identities" 200 "$(code "$J_ADMIN" GET '/admin/identity/users?search=admin')"
+body | grep -q '"username":"admin"' && ok "demo administrator 'admin' provisioned" || ok "no demo administrator (production profile)"
 
 echo "== Input validation (mass assignment / bad types)"
 check "Unknown field rejected" 400 "$(code "$J_CISO" POST /risks '{"title":"Valid title","description":"d","category":"Cyber","likelihood":3,"impact":3,"ownerName":"Owner","isAdmin":true}')"

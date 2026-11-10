@@ -23,6 +23,9 @@ import { integrationsRouter } from './modules/integrations/integrations.routes.j
 import { adminRouter } from './modules/admin/admin.routes.js';
 import { complianceRouter } from './modules/compliance/compliance.routes.js';
 import { streamRouter } from './modules/stream/stream.routes.js';
+import { configRouter } from './modules/config/config.routes.js';
+import { identityRouter } from './modules/identity/identity.routes.js';
+import { ipGateRouter, networkAccessGuard } from './security/networkAccess.js';
 
 export function createApp() {
   const app = express();
@@ -59,6 +62,11 @@ export function createApp() {
   });
 
   app.use('/api', globalRateLimit);
+  // NGINX auth_request sub-requests (reachable only from the gateway over mTLS; the
+  // gateway refuses /api/internal/ from the outside).
+  app.use('/api/internal/ip-gate', ipGateRouter);
+  // Administrator-defined source-network allowlist — applies to sign-in as well.
+  app.use('/api', networkAccessGuard);
   app.use('/api', csrfProtection);
   app.use('/api/auth', authRouter);
 
@@ -75,6 +83,8 @@ export function createApp() {
   app.use('/api/assets', assetsRouter);
   app.use('/api/change-tickets', changeTicketsRouter);
   app.use('/api/integrations', integrationsRouter);
+  app.use('/api/admin/config', configRouter);
+  app.use('/api/admin/identity', identityRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/audit', auditRouter);
   app.use('/api/compliance', complianceRouter);

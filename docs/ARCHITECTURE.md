@@ -42,18 +42,19 @@ flowchart TB
     Browser([Browser<br/>React SPA])
 
     subgraph EDGE["edge network — only published ports 80/443"]
-        GW["Gateway — NGINX (unprivileged, read-only FS)<br/>TLS 1.3 only · HSTS · strict CSP<br/>rate limiting · serves SPA"]
+        GW["Gateway — NGINX (unprivileged, read-only FS)<br/>TLS 1.3 only · HSTS · strict CSP<br/>per-IP flood limits · canonical-host redirect<br/>auth_request network gate · serves SPA"]
     end
 
     subgraph APPNET["app network (internal: true)"]
-        API["API — Node.js 22 / Express 5 / TypeScript<br/>OIDC RP · RBAC · Zod validation<br/>KPI/KRI engine · connector framework<br/>scheduler · SSE stream"]
-        KC["Keycloak 26 (OIDC IdP)<br/>MFA (TOTP) · brute-force protection<br/>password policy"]
+        API["API — Node.js 22 / Express 5 / TypeScript<br/>OIDC RP · RBAC · Zod validation<br/>KPI/KRI engine · connector framework<br/>configuration catalogue · scheduler · SSE"]
+        KC["Keycloak 26 (OIDC IdP)<br/>MFA (TOTP) · brute-force protection<br/>admin-defined password policy"]
     end
 
     subgraph DATANET["data network (internal: true)"]
-        PG[("PostgreSQL 17 primary<br/>TLS 1.3 · SCRAM-SHA-256<br/>append-only audit_log")]
+        PG[("PostgreSQL 17 primary<br/>TLS 1.3 · SCRAM-SHA-256<br/>append-only audit_log · system_settings")]
         PGR[("Read replicas<br/>(optional, multi-cluster)")]
         MIG["migrate (one-shot)<br/>prisma migrate deploy + seed"]
+        IDPI["idp-init (one-shot, every deploy)<br/>provisioner account · redirect URIs<br/>identity policy · demo admin"]
     end
 
     subgraph EGRESS["egress network"]
@@ -61,17 +62,23 @@ flowchart TB
     end
 
     VAULT[("HashiCorp Vault KV v2<br/>(optional secrets provider)")]
+    HOST["Docker host (Ubuntu / RHEL)<br/>apply-deployment.sh · host baseline script"]
 
     Browser -- "HTTPS (TLS 1.3)" --> GW
     GW -- "mTLS 1.3 (client cert)" --> API
+    GW -- "auth_request network gate" --> API
     GW -- "TLS 1.3 /auth/*" --> KC
     API -- "TLS backchannel (token, JWKS, userinfo)" --> KC
+    API -- "Admin REST as ciso-provisioner: policy sync, enrolment" --> KC
     API -- "TLS + SCRAM (ciso_app: DML only)" --> PG
     API -.->|reads| PGR
     KC -- "TLS verify-full" --> PG
     MIG -- "TLS (owner role)" --> PG
-    API -- "HTTPS · SSRF-guarded · size-capped" --> EXT
+    IDPI -- "Admin REST (bootstrap admin)" --> KC
+    IDPI -- "reads identity settings" --> PG
+    API -- "HTTPS · SSRF-guarded · retries · size-capped" --> EXT
     API -.->|AppRole or token| VAULT
+    HOST -.->|operator applies deployment.env| GW
 ```
 
 | Zone | Members | Exposure |
@@ -87,7 +94,7 @@ flowchart TB
 flowchart TB
     subgraph Pipeline["Request pipeline (app.ts)"]
         direction LR
-        H[helmet headers<br/>no-store] --> RL[rate limit] --> CSRF[CSRF guard<br/>Origin + double-submit] --> AUTHN[authenticate<br/>JWT + live session] --> RBAC[requirePermission] --> ZOD[Zod .strict schemas]
+        H[helmet headers<br/>no-store] --> RL[per-IP rate limit<br/>admin-defined] --> NET[network allowlist<br/>admin-defined] --> CSRF[CSRF guard<br/>Origin + double-submit] --> AUTHN[authenticate<br/>JWT + live session] --> URL[per-user rate limit] --> RBAC[requirePermission] --> ZOD[Zod .strict schemas]
     end
 
     subgraph Modules
@@ -99,6 +106,8 @@ flowchart TB
         REM[remediation<br/>vulns · assets · change tickets]
         INT[integrations<br/>connector config · test · sync]
         ADMIN[admin<br/>users · settings · system]
+        CONF[config<br/>status · drift · bundles · demo tools]
+        IDN[identity<br/>enrolment · roles · MFA reset · policy sync]
         AUDIT[audit<br/>query · verify · CSV export]
         COMP[compliance report]
         SSE["stream — SSE"]
@@ -109,12 +118,15 @@ flowchart TB
         AUDSVC[audit service<br/>HMAC hash chain]
         PRISMA[Prisma client<br/>+ read replicas]
         EVENTS[event hub]
-        SCHED[scheduler<br/>connector leases · snapshots<br/>KRI eval · retention]
+        SCHED[scheduler<br/>connector leases · snapshots<br/>KRI eval · retention<br/>live settings · IdP policy · demo ticks]
+        CAT[configuration catalogue<br/>schemas · apply modes · warnings]
+        KCA[Keycloak admin client<br/>provisioner service account]
+        SIM[demo simulator<br/>dataset generator]
     end
 
     subgraph Connectors["Connector framework"]
-        REG[registry<br/>15 adapters]
-        HTTP[ConnectorHttpClient<br/>API key · Basic · OAuth2 · mTLS]
+        REG[registry<br/>19 adapters incl. generic REST/JSON]
+        HTTP[ConnectorHttpClient<br/>API key · Basic · OAuth2 · mTLS<br/>API parameters · retries]
         EGR[egress policy<br/>connect-time IP checks]
         ING[ingest<br/>normalised upserts only]
     end
@@ -127,6 +139,10 @@ flowchart TB
     REG --> ING --> PRISMA
     AUTH & INT & INC & RISK --> CRYPTO
     SSE --> EVENTS
+    ADMIN & CONF & IDN --> CAT
+    IDN --> KCA
+    CONF --> SIM
+    SCHED --> SIM & KCA
 ```
 
 ## 4. Data model
@@ -166,6 +182,7 @@ erDiagram
         enum authMode
         int pollIntervalSec
         json settings
+        json requestOptions "path prefix, headers, query, timeout, retries"
         string secretEnc "AES-256-GCM, AAD=connector id"
         enum status
     }

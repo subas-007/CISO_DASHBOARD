@@ -2,18 +2,19 @@ flowchart TB
     Browser([Browser<br/>React SPA])
 
     subgraph EDGE["edge network — only published ports 80/443"]
-        GW["Gateway — NGINX (unprivileged, read-only FS)<br/>TLS 1.3 only · HSTS · strict CSP<br/>rate limiting · serves SPA"]
+        GW["Gateway — NGINX (unprivileged, read-only FS)<br/>TLS 1.3 only · HSTS · strict CSP<br/>per-IP flood limits · canonical-host redirect<br/>auth_request network gate · serves SPA"]
     end
 
     subgraph APPNET["app network (internal: true)"]
-        API["API — Node.js 22 / Express 5 / TypeScript<br/>OIDC RP · RBAC · Zod validation<br/>KPI/KRI engine · connector framework<br/>scheduler · SSE stream"]
-        KC["Keycloak 26 (OIDC IdP)<br/>MFA (TOTP) · brute-force protection<br/>password policy"]
+        API["API — Node.js 22 / Express 5 / TypeScript<br/>OIDC RP · RBAC · Zod validation<br/>KPI/KRI engine · connector framework<br/>configuration catalogue · scheduler · SSE"]
+        KC["Keycloak 26 (OIDC IdP)<br/>MFA (TOTP) · brute-force protection<br/>admin-defined password policy"]
     end
 
     subgraph DATANET["data network (internal: true)"]
-        PG[("PostgreSQL 17 primary<br/>TLS 1.3 · SCRAM-SHA-256<br/>append-only audit_log")]
+        PG[("PostgreSQL 17 primary<br/>TLS 1.3 · SCRAM-SHA-256<br/>append-only audit_log · system_settings")]
         PGR[("Read replicas<br/>(optional, multi-cluster)")]
         MIG["migrate (one-shot)<br/>prisma migrate deploy + seed"]
+        IDPI["idp-init (one-shot, every deploy)<br/>provisioner account · redirect URIs<br/>identity policy · demo admin"]
     end
 
     subgraph EGRESS["egress network"]
@@ -21,14 +22,20 @@ flowchart TB
     end
 
     VAULT[("HashiCorp Vault KV v2<br/>(optional secrets provider)")]
+    HOST["Docker host (Ubuntu / RHEL)<br/>apply-deployment.sh · host baseline script"]
 
     Browser -- "HTTPS (TLS 1.3)" --> GW
     GW -- "mTLS 1.3 (client cert)" --> API
+    GW -- "auth_request network gate" --> API
     GW -- "TLS 1.3 /auth/*" --> KC
     API -- "TLS backchannel (token, JWKS, userinfo)" --> KC
+    API -- "Admin REST as ciso-provisioner: policy sync, enrolment" --> KC
     API -- "TLS + SCRAM (ciso_app: DML only)" --> PG
     API -.->|reads| PGR
     KC -- "TLS verify-full" --> PG
     MIG -- "TLS (owner role)" --> PG
-    API -- "HTTPS · SSRF-guarded · size-capped" --> EXT
+    IDPI -- "Admin REST (bootstrap admin)" --> KC
+    IDPI -- "reads identity settings" --> PG
+    API -- "HTTPS · SSRF-guarded · retries · size-capped" --> EXT
     API -.->|AppRole or token| VAULT
+    HOST -.->|operator applies deployment.env| GW

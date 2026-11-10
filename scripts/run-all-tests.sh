@@ -2,8 +2,8 @@
 # Full verification pipeline:
 #   1. backend unit tests + typecheck, frontend typecheck + build
 #   2. fresh stack (empty volumes → demo dummy data) + vendor API simulator
-#   3. Playwright: auth/MFA, RBAC matrix, every page × role, workflows, 15 connectors,
-#      resilience/hardening  (tests/e2e)
+#   3. Playwright: auth/MFA, RBAC matrix, every page × role, workflows, 19 connectors,
+#      resilience/hardening, dynamic configuration  (tests/e2e)
 #   4. bash smoke test (scripts/smoke-test.sh)
 #
 #   usage: scripts/run-all-tests.sh [--keep-data]     (--keep-data: don't wipe volumes)
