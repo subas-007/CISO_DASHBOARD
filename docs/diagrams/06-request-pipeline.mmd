@@ -1,0 +1,22 @@
+flowchart TD
+    A([HTTPS request]) --> B{TLS 1.3 at gateway?}
+    B -- no --> X1[[handshake refused]]
+    B -- yes --> C[Gateway: rate limit · body size · overwrite X-Forwarded-For]
+    C --> D[mTLS hop to API<br/>client cert verified against internal CA]
+    D --> E[Security headers · Cache-Control: no-store]
+    E --> F{Unsafe method?}
+    F -- yes --> G{Sec-Fetch-Site / Origin OK<br/>and X-CSRF-Token == cookie?}
+    G -- no --> X2[[403 CSRF]]
+    G -- yes --> H
+    F -- no --> H{Access JWT valid?<br/>HS512 · iss · aud · exp}
+    H -- no --> X3[[401 → client tries silent refresh]]
+    H -- yes --> I{Server-side session live?<br/>not revoked · user active · absolute TTL}
+    I -- no --> X3
+    I -- yes --> J{RBAC: role grants permission?}
+    J -- no --> K[audit access.denied] --> X4[[403]]
+    J -- yes --> L{Zod .strict validation<br/>types · ranges · unknown keys}
+    L -- no --> X5[[400 with field paths, no values]]
+    L -- yes --> M[Business logic<br/>Prisma parameterised queries]
+    M --> N[(Transaction:<br/>change + audit record)]
+    N --> O[Publish SSE change notification]
+    O --> P([JSON response])

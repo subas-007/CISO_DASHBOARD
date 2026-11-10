@@ -1,0 +1,11 @@
+flowchart TD
+    A[Ubuntu / RHEL VM<br/>Docker Engine or Podman + compose] --> B[scripts/generate-certs.sh host<br/>internal CA + service cert]
+    B --> C[scripts/generate-secrets.sh<br/>.env + secrets/ — mode 600, git-ignored]
+    C --> D[docker compose up -d --build]
+    D --> E[postgres: TLS entrypoint · SCRAM · init roles]
+    E --> F[migrate: prisma migrate deploy<br/>+ triggers, grants · seed]
+    E --> G[keycloak: realm import<br/>roles · client · demo users w/ forced TOTP]
+    F --> H[api: healthy over mTLS]
+    G --> H
+    H --> I[gateway: TLS 1.3 on :443]
+    I --> J[scripts/smoke-test.sh<br/>52 end-to-end checks]

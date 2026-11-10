@@ -1,0 +1,413 @@
+// CISO Executive Dashboard — data model
+// Sensitive free-text columns are stored AES-256-GCM encrypted by the application
+// (suffix "Enc"); lookups on encrypted values use HMAC blind indexes (suffix "Index").
+// The audit_log table is append-only (enforced by DB triggers + revoked privileges)
+// and hash-chained (HMAC-SHA256) for tamper evidence.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  CISO
+  SECOPS
+  PATCH_ADMIN
+  AUDITOR
+}
+
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum ConnectorCategory {
+  SIEM
+  VULNERABILITY
+  PATCH
+  CHANGE
+  THREAT_INTEL
+}
+
+enum AuthMode {
+  NONE
+  API_KEY
+  BASIC
+  OAUTH2
+  MTLS
+}
+
+enum ConnectorStatus {
+  UNTESTED
+  HEALTHY
+  FAILED
+  DISABLED
+}
+
+enum VulnStatus {
+  OPEN
+  IN_PROGRESS
+  REMEDIATED
+  RISK_ACCEPTED
+  FALSE_POSITIVE
+}
+
+enum IncidentStatus {
+  NEW
+  TRIAGE
+  CONTAINED
+  RESOLVED
+  CLOSED
+}
+
+enum ThreatType {
+  CVE
+  RANSOMWARE
+  SUPPLY_CHAIN
+  ADVISORY
+  IOC
+}
+
+enum ThreatStatus {
+  NEW
+  TRIAGED
+  ACTIONED
+  DISMISSED
+}
+
+enum RiskStatus {
+  OPEN
+  MITIGATING
+  ACCEPTED
+  CLOSED
+}
+
+enum AcceptanceStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  REVOKED
+}
+
+enum KriDirection {
+  HIGHER_IS_WORSE
+  LOWER_IS_WORSE
+}
+
+enum RagStatus {
+  GREEN
+  AMBER
+  RED
+}
+
+model User {
+  id          String    @id @default(uuid()) @db.Uuid
+  subject     String    @unique
+  emailEnc    String?
+  // Lookup only — identity is the OIDC subject. Not unique: a user re-provisioned in
+  // the IdP gets a new `sub` but may keep the same email.
+  emailIndex  String?
+  displayName String
+  roles       Role[]
+  active      Boolean   @default(true)
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  sessions    Session[]
+
+  @@index([emailIndex])
+  @@map("users")
+}
+
+model Session {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @db.Uuid
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  familyId          String    @db.Uuid
+  refreshHash       String    @unique
+  idpRefreshEnc     String?
+  idTokenEnc        String?
+  ip                String?
+  userAgent         String?
+  expiresAt         DateTime
+  absoluteExpiresAt DateTime
+  revokedAt         DateTime?
+  revokeReason      String?
+  createdAt         DateTime  @default(now())
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("sessions")
+}
+
+model Connector {
+  id              String            @id @db.Uuid
+  name            String            @unique
+  vendor          String
+  category        ConnectorCategory
+  baseUrl         String
+  authMode        AuthMode
+  pollIntervalSec Int
+  enabled         Boolean           @default(false)
+  settings        Json              @default("{}")
+  secretEnc       String?
+  status          ConnectorStatus   @default(UNTESTED)
+  lastTestAt      DateTime?
+  lastSyncAt      DateTime?
+  lastSuccessAt   DateTime?
+  lastError       String?
+  lastRecordCount Int?
+  leaseUntil      DateTime?
+  createdById     String?           @db.Uuid
+  updatedById     String?           @db.Uuid
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@map("connectors")
+}
+
+model Asset {
+  id              String          @id @default(uuid()) @db.Uuid
+  hostname        String          @unique
+  ipAddress       String?
+  os              String?
+  businessUnit    String          @default("Unassigned")
+  owner           String?
+  criticality     Int             @default(3)
+  patchCompliant  Boolean         @default(true)
+  missingPatches  Int             @default(0)
+  lastPatchedAt   DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  vulnerabilities Vulnerability[]
+  risks           RiskAsset[]
+
+  @@index([businessUnit])
+  @@map("assets")
+}
+
+model Vulnerability {
+  id              String        @id @default(uuid()) @db.Uuid
+  assetId         String        @db.Uuid
+  asset           Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  source          String
+  externalId      String
+  cveId           String?
+  title           String
+  severity        Severity
+  cvss            Float?
+  status          VulnStatus    @default(OPEN)
+  discoveredAt    DateTime
+  dueAt           DateTime?
+  remediatedAt    DateTime?
+  remediationNote String?
+  changeTicketId  String?       @db.Uuid
+  changeTicket    ChangeTicket? @relation(fields: [changeTicketId], references: [id], onDelete: SetNull)
+  updatedById     String?       @db.Uuid
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([source, externalId])
+  @@index([status, severity])
+  @@index([cveId])
+  @@index([assetId])
+  @@map("vulnerabilities")
+}
+
+model ChangeTicket {
+  id              String          @id @default(uuid()) @db.Uuid
+  system          String
+  externalKey     String
+  title           String
+  status          String
+  url             String?
+  sourceUpdatedAt DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  vulnerabilities Vulnerability[]
+
+  @@unique([system, externalKey])
+  @@map("change_tickets")
+}
+
+model Incident {
+  id             String         @id @default(uuid()) @db.Uuid
+  source         String
+  externalId     String
+  title          String
+  descriptionEnc String?
+  severity       Severity
+  status         IncidentStatus @default(NEW)
+  category       String         @default("General")
+  occurredAt     DateTime
+  detectedAt     DateTime
+  respondedAt    DateTime?
+  resolvedAt     DateTime?
+  assetsAffected Int            @default(0)
+  createdById    String?        @db.Uuid
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@unique([source, externalId])
+  @@index([detectedAt])
+  @@index([status])
+  @@map("incidents")
+}
+
+model ThreatItem {
+  id                 String       @id @default(uuid()) @db.Uuid
+  source             String
+  sourceRef          String
+  type               ThreatType
+  title              String
+  summary            String
+  severity           Severity
+  cveId              String?
+  publishedAt        DateTime
+  impactedAssetCount Int          @default(0)
+  tags               String[]
+  status             ThreatStatus @default(NEW)
+  triageNote         String?
+  triagedById        String?      @db.Uuid
+  triagedAt          DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@unique([source, sourceRef])
+  @@index([publishedAt])
+  @@index([type, severity])
+  @@index([cveId])
+  @@map("threat_items")
+}
+
+model Risk {
+  id          String           @id @default(uuid()) @db.Uuid
+  title       String
+  description String
+  category    String
+  likelihood  Int
+  impact      Int
+  ownerName   String
+  status      RiskStatus       @default(OPEN)
+  treatment   String?
+  createdById String?          @db.Uuid
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  assets      RiskAsset[]
+  acceptances RiskAcceptance[]
+
+  @@index([likelihood, impact])
+  @@map("risks")
+}
+
+model RiskAsset {
+  riskId  String @db.Uuid
+  assetId String @db.Uuid
+  risk    Risk   @relation(fields: [riskId], references: [id], onDelete: Cascade)
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@id([riskId, assetId])
+  @@map("risk_assets")
+}
+
+model RiskAcceptance {
+  id               String           @id @default(uuid()) @db.Uuid
+  riskId           String           @db.Uuid
+  risk             Risk             @relation(fields: [riskId], references: [id], onDelete: Cascade)
+  justificationEnc String
+  requestedById    String           @db.Uuid
+  requestedByName  String
+  requestedAt      DateTime         @default(now())
+  status           AcceptanceStatus @default(PENDING)
+  decidedById      String?          @db.Uuid
+  decidedByName    String?
+  decidedAt        DateTime?
+  decisionNote     String?
+  expiresAt        DateTime
+
+  @@index([status])
+  @@map("risk_acceptances")
+}
+
+model KriDefinition {
+  id             String       @id @default(uuid()) @db.Uuid
+  key            String       @unique
+  name           String
+  description    String
+  metric         String
+  unit           String
+  direction      KriDirection
+  amberThreshold Float
+  redThreshold   Float
+  enabled        Boolean      @default(true)
+  updatedById    String?      @db.Uuid
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("kri_definitions")
+}
+
+model KriBreach {
+  id               String    @id @default(uuid()) @db.Uuid
+  kriKey           String
+  level            RagStatus
+  value            Float
+  threshold        Float
+  detectedAt       DateTime  @default(now())
+  acknowledgedAt   DateTime?
+  acknowledgedById String?   @db.Uuid
+
+  @@index([kriKey, detectedAt])
+  @@map("kri_breaches")
+}
+
+model MetricSnapshot {
+  id         BigInt   @id @default(autoincrement())
+  metric     String
+  value      Float
+  capturedAt DateTime @default(now())
+
+  @@index([metric, capturedAt])
+  @@map("metric_snapshots")
+}
+
+model SystemSetting {
+  key         String   @id
+  value       Json
+  updatedById String?  @db.Uuid
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  ts         DateTime @db.Timestamptz(3)
+  actorId    String?
+  actorName  String?
+  actorRoles String[]
+  action     String
+  targetType String?
+  targetId   String?
+  outcome    String
+  ip         String?
+  userAgent  String?
+  details    Json
+  prevHash   String
+  hash       String   @unique
+
+  @@index([ts])
+  @@index([action])
+  @@index([actorId])
+  @@map("audit_log")
+}

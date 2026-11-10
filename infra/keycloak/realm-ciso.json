@@ -1,0 +1,161 @@
+{
+  "realm": "ciso",
+  "displayName": "CISO Executive Dashboard",
+  "enabled": true,
+  "sslRequired": "all",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "maxDeltaTimeSeconds": 43200,
+  "minimumQuickLoginWaitSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "passwordPolicy": "length(14) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(12)",
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 900,
+  "ssoSessionMaxLifespan": 28800,
+  "offlineSessionIdleTimeout": 0,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
+  "eventsEnabled": true,
+  "eventsExpiration": 7776000,
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
+  "enabledEventTypes": [
+    "LOGIN", "LOGIN_ERROR", "LOGOUT", "LOGOUT_ERROR", "CODE_TO_TOKEN", "CODE_TO_TOKEN_ERROR",
+    "REFRESH_TOKEN", "REFRESH_TOKEN_ERROR", "UPDATE_TOTP", "REMOVE_TOTP", "UPDATE_PASSWORD", "UPDATE_CREDENTIAL"
+  ],
+  "browserSecurityHeaders": {
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self'; object-src 'none';",
+    "xFrameOptions": "SAMEORIGIN",
+    "xContentTypeOptions": "nosniff",
+    "xRobotsTag": "none",
+    "strictTransportSecurity": "max-age=63072000; includeSubDomains",
+    "referrerPolicy": "no-referrer"
+  },
+  "roles": {
+    "realm": [
+      { "name": "administrator", "description": "Platform administrator: integrations, system, users, parameters, logs" },
+      { "name": "ciso", "description": "CISO / Executive: full executive overview and risk acceptance approvals" },
+      { "name": "secops_analyst", "description": "SecOps Analyst: integration management, threat triage, incident logging" },
+      { "name": "patch_admin", "description": "IT / Patch Admin: remediation updates and change ticket linkage" },
+      { "name": "auditor", "description": "Auditor: read-only compliance reports and audit logs" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "ciso-dashboard",
+      "name": "CISO Executive Dashboard",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${OIDC_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": false,
+      "consentRequired": false,
+      "fullScopeAllowed": true,
+      "rootUrl": "${PUBLIC_BASE_URL}",
+      "baseUrl": "/",
+      "redirectUris": ["${PUBLIC_BASE_URL}/api/auth/callback"],
+      "webOrigins": ["${PUBLIC_BASE_URL}"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "${PUBLIC_BASE_URL}/",
+        "access.token.lifespan": "300",
+        "client.session.idle.timeout": "900",
+        "client.session.max.lifespan": "28800",
+        "use.refresh.tokens": "true",
+        "oauth2.device.authorization.grant.enabled": "false",
+        "require.pushed.authorization.requests": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "ciso.demo",
+      "email": "ciso.demo@example.com",
+      "firstName": "Casey",
+      "lastName": "Exec (CISO)",
+      "enabled": true,
+      "emailVerified": true,
+      "realmRoles": ["ciso"],
+      "requiredActions": ["CONFIGURE_TOTP"],
+      "credentials": [{ "type": "password", "value": "${DEMO_USER_PASSWORD}", "temporary": true }]
+    },
+    {
+      "username": "admin.demo",
+      "email": "admin.demo@example.com",
+      "firstName": "Alex",
+      "lastName": "Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "realmRoles": ["administrator"],
+      "requiredActions": ["CONFIGURE_TOTP"],
+      "credentials": [{ "type": "password", "value": "${DEMO_USER_PASSWORD}", "temporary": true }]
+    },
+    {
+      "username": "secops.demo",
+      "email": "secops.demo@example.com",
+      "firstName": "Sam",
+      "lastName": "SecOps",
+      "enabled": true,
+      "emailVerified": true,
+      "realmRoles": ["secops_analyst"],
+      "requiredActions": ["CONFIGURE_TOTP"],
+      "credentials": [{ "type": "password", "value": "${DEMO_USER_PASSWORD}", "temporary": true }]
+    },
+    {
+      "username": "patch.demo",
+      "email": "patch.demo@example.com",
+      "firstName": "Pat",
+      "lastName": "Patching",
+      "enabled": true,
+      "emailVerified": true,
+      "realmRoles": ["patch_admin"],
+      "requiredActions": ["CONFIGURE_TOTP"],
+      "credentials": [{ "type": "password", "value": "${DEMO_USER_PASSWORD}", "temporary": true }]
+    },
+    {
+      "username": "auditor.demo",
+      "email": "auditor.demo@example.com",
+      "firstName": "Avery",
+      "lastName": "Auditor",
+      "enabled": true,
+      "emailVerified": true,
+      "realmRoles": ["auditor"],
+      "requiredActions": ["CONFIGURE_TOTP"],
+      "credentials": [{ "type": "password", "value": "${DEMO_USER_PASSWORD}", "temporary": true }]
+    }
+  ]
+}

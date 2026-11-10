@@ -1,0 +1,27 @@
+sequenceDiagram
+    autonumber
+    actor U as User (browser)
+    participant GW as Gateway (NGINX, TLS 1.3)
+    participant API as API (mTLS)
+    participant IdP as Keycloak / corporate IdP
+    participant DB as PostgreSQL
+
+    U->>GW: GET /api/auth/login
+    GW->>API: forward (mTLS)
+    API->>API: generate state, nonce, PKCE verifier (S256)
+    API-->>U: 303 → IdP authorize URL + Set-Cookie __Host-ciso_oidc (JWE-encrypted state, 10 min)
+    U->>IdP: authenticate (password + TOTP MFA, brute-force lockout)
+    IdP-->>U: 302 → /api/auth/callback?code&state
+    U->>API: GET /api/auth/callback (via gateway)
+    API->>API: decrypt state cookie, verify state
+    API->>IdP: token exchange (code + code_verifier, client_secret_basic) over TLS backchannel
+    IdP-->>API: id_token, access_token, refresh_token
+    API->>API: validate id_token (sig, iss, aud, exp, nonce) → map role claim → app roles
+    alt no mapped role / user disabled
+        API->>DB: audit auth.login FAILURE
+        API-->>U: 303 /login?error=…
+    else authorised
+        API->>DB: upsert user (email AES-256-GCM + blind index), create session (refresh hash only)
+        API->>DB: audit auth.login SUCCESS
+        API-->>U: 303 returnTo + Set-Cookie __Host-ciso_at (JWT 10 min), __Host-ciso_rt, __Host-ciso_csrf
+    end

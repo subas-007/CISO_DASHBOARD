@@ -1,0 +1,43 @@
+flowchart TB
+    subgraph Pipeline["Request pipeline (app.ts)"]
+        direction LR
+        H[helmet headers<br/>no-store] --> RL[rate limit] --> CSRF[CSRF guard<br/>Origin + double-submit] --> AUTHN[authenticate<br/>JWT + live session] --> RBAC[requirePermission] --> ZOD[Zod .strict schemas]
+    end
+
+    subgraph Modules
+        AUTH[auth<br/>OIDC · sessions · tokens]
+        KPI[kpi / kri<br/>engine · trends · breaches]
+        RISK[risk<br/>5×5 matrix · drill-down · acceptance]
+        THR[threats<br/>stream · facets · triage]
+        INC[incidents]
+        REM[remediation<br/>vulns · assets · change tickets]
+        INT[integrations<br/>connector config · test · sync]
+        ADMIN[admin<br/>users · settings · system]
+        AUDIT[audit<br/>query · verify · CSV export]
+        COMP[compliance report]
+        SSE["stream — SSE"]
+    end
+
+    subgraph Core
+        CRYPTO[crypto<br/>AES-256-GCM key ring<br/>HMAC blind index]
+        AUDSVC[audit service<br/>HMAC hash chain]
+        PRISMA[Prisma client<br/>+ read replicas]
+        EVENTS[event hub]
+        SCHED[scheduler<br/>connector leases · snapshots<br/>KRI eval · retention]
+    end
+
+    subgraph Connectors["Connector framework"]
+        REG[registry<br/>15 adapters]
+        HTTP[ConnectorHttpClient<br/>API key · Basic · OAuth2 · mTLS]
+        EGR[egress policy<br/>connect-time IP checks]
+        ING[ingest<br/>normalised upserts only]
+    end
+
+    Pipeline --> Modules
+    Modules --> AUDSVC & PRISMA & EVENTS
+    INT --> REG
+    SCHED --> REG
+    REG --> HTTP --> EGR
+    REG --> ING --> PRISMA
+    AUTH & INT & INC & RISK --> CRYPTO
+    SSE --> EVENTS

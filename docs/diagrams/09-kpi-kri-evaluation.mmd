@@ -1,0 +1,15 @@
+flowchart LR
+    subgraph Every_15_min[Every 15 min]
+        A[compute KPIs] --> B[(metric_snapshots)]
+    end
+    subgraph Every_5_min[Every 5 min]
+        C[compute KPIs] --> D[load KRI definitions<br/>thresholds = risk appetite]
+        D --> E{for each enabled KRI:<br/>value vs amber / red}
+        E -- GREEN --> F[no action]
+        E -- AMBER/RED --> G{open unacknowledged breach<br/>at same or higher level?}
+        G -- yes --> F
+        G -- "no, or AMBER→RED escalation" --> H[(kri_breaches)] --> I[SSE: kri] --> J[Dashboard RAG updates live]
+    end
+    K[CISO / Admin edits threshold] --> L{red/amber ordering valid<br/>for direction?}
+    L -- no --> M[[400]]
+    L -- yes --> N[(update + audit before/after)] --> I

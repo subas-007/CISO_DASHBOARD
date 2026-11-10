@@ -1,0 +1,228 @@
+# CISO Executive Dashboard — local VM deployment (Ubuntu / RHEL, Docker or Podman).
+#
+#   1. ./scripts/generate-certs.sh <hostname>      # TLS material → ./certs
+#   2. ./scripts/generate-secrets.sh                # .env + ./secrets (git-ignored)
+#   3. docker compose up -d --build
+#
+# Network zones (zero-trust segmentation):
+#   edge   — only the gateway; ports 80/443 published
+#   app    — internal: gateway ↔ api (mTLS), gateway/api ↔ keycloak (TLS)
+#   data   — internal: api/migrate/keycloak ↔ postgres (TLS)
+#   egress — api only: outbound to security tool APIs (SSRF-guarded)
+
+name: ciso-dashboard
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+x-api-secrets: &api-secrets
+  - database_url
+  - oidc_client_secret
+  - jwt_secret
+  - state_encryption_key
+  - data_encryption_keys
+  - blind_index_key
+  - audit_hmac_key
+
+x-api-env: &api-env
+  NODE_ENV: production
+  PORT: "8443"
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  APP_VERSION: "1.0.0"
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+  TRUST_PROXY_HOPS: "1"
+  # Secrets are delivered as files (Docker secrets) — never as plain env values.
+  DATABASE_URL_FILE: /run/secrets/database_url
+  OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+  JWT_SECRET_FILE: /run/secrets/jwt_secret
+  STATE_ENCRYPTION_KEY_FILE: /run/secrets/state_encryption_key
+  DATA_ENCRYPTION_KEYS_FILE: /run/secrets/data_encryption_keys
+  BLIND_INDEX_KEY_FILE: /run/secrets/blind_index_key
+  AUDIT_HMAC_KEY_FILE: /run/secrets/audit_hmac_key
+  DATA_ENCRYPTION_ACTIVE_KEY: ${DATA_ENCRYPTION_ACTIVE_KEY:-v1}
+  SECRETS_PROVIDER: ${SECRETS_PROVIDER:-env}
+  VAULT_ADDR: ${VAULT_ADDR:-}
+  VAULT_KV_MOUNT: ${VAULT_KV_MOUNT:-secret}
+  VAULT_KV_PATH: ${VAULT_KV_PATH:-ciso-dashboard}
+  DATABASE_REPLICA_URLS: ${DATABASE_REPLICA_URLS:-}
+  OIDC_ISSUER_URL: ${PUBLIC_BASE_URL}/auth/realms/ciso
+  OIDC_DISCOVERY_URL: https://keycloak:8443/auth/realms/ciso
+  OIDC_CLIENT_ID: ciso-dashboard
+  OIDC_ROLE_CLAIM: roles
+  TLS_CERT_FILE: /run/certs/tls.crt
+  TLS_KEY_FILE: /run/certs/tls.key
+  TLS_CA_FILE: /run/certs/ca.crt
+  TLS_REQUIRE_CLIENT_CERT: "true"
+  NODE_EXTRA_CA_CERTS: /run/certs/ca.crt
+  CONNECTOR_BLOCKED_CIDRS: 172.30.0.0/16
+  CONNECTOR_ALLOWED_HOSTS: ${CONNECTOR_ALLOWED_HOSTS:-}
+  CONNECTOR_BLOCK_PRIVATE_NETWORKS: ${CONNECTOR_BLOCK_PRIVATE_NETWORKS:-false}
+
+services:
+  postgres:
+    <<: *hardening
+    image: postgres:17-alpine
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
+    entrypoint: ["/bin/sh", "/usr/local/bin/tls-entrypoint.sh"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ciso}
+      POSTGRES_USER: ${POSTGRES_USER:-ciso_owner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/generate-secrets.sh}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256 --data-checksums"
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run scripts/generate-secrets.sh}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:?run scripts/generate-secrets.sh}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro,z
+      - ./infra/postgres/tls-entrypoint.sh:/usr/local/bin/tls-entrypoint.sh:ro,z
+      - ./infra/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro,z
+      - ./certs:/certs-src:ro,z
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 2g }
+
+  keycloak:
+    <<: *hardening
+    image: quay.io/keycloak/keycloak:26.4
+    user: "${APP_UID:-1000}:0"
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak?sslmode=verify-full&sslrootcert=/opt/keycloak/conf/certs/ca.crt
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD}
+      KC_HOSTNAME: ${PUBLIC_BASE_URL}/auth
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_HTTP_ENABLED: "false"
+      KC_HTTPS_PORT: "8443"
+      KC_HTTPS_CERTIFICATE_FILE: /opt/keycloak/conf/certs/tls.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /opt/keycloak/conf/certs/tls.key
+      KC_HTTPS_PROTOCOLS: TLSv1.3
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:-kcadmin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?run scripts/generate-secrets.sh}
+      # Consumed by placeholders in the realm import file
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?run scripts/generate-secrets.sh}
+      DEMO_USER_PASSWORD: ${DEMO_USER_PASSWORD:?run scripts/generate-secrets.sh}
+    volumes:
+      - ./infra/keycloak/realm-ciso.json:/opt/keycloak/data/import/realm-ciso.json:ro,z
+      - ./certs:/opt/keycloak/conf/certs:ro,z
+    networks: [app, data]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 1536m }
+
+  migrate:
+    # Same image as the API (built by the api service); runs migrations + seed once.
+    image: ciso-dashboard/api:1.0.0
+    pull_policy: never
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        DATABASE_URL="$$(cat /run/secrets/migrate_database_url)" ./node_modules/.bin/prisma migrate deploy &&
+        node dist/db/seed.js
+    environment:
+      <<: *api-env
+      DATABASE_URL_FILE: /run/secrets/migrate_database_url
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+      SCHEDULER_ENABLED: "false"
+    secrets: [migrate_database_url, oidc_client_secret, jwt_secret, state_encryption_key, data_encryption_keys, blind_index_key, audit_hmac_key]
+    volumes:
+      - ./certs:/run/certs:ro,z
+    networks: [data]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    <<: *hardening
+    image: ciso-dashboard/api:1.0.0
+    build: { context: ./backend }
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    read_only: true
+    tmpfs: ["/tmp:size=64m,noexec,nosuid"]
+    environment:
+      <<: *api-env
+    secrets: *api-secrets
+    volumes:
+      - ./certs:/run/certs:ro,z
+    networks: [app, data, egress]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      keycloak: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 1g }
+
+  gateway:
+    <<: *hardening
+    image: ciso-dashboard/gateway:1.0.0
+    build:
+      context: .
+      dockerfile: infra/gateway/Dockerfile
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    read_only: true
+    tmpfs: ["/tmp:size=64m,noexec,nosuid"]
+    ports:
+      - "${HTTPS_PORT:-443}:8443"
+      - "${HTTP_PORT:-80}:8080"
+    volumes:
+      - ./certs:/etc/nginx/certs:ro,z
+    networks: [edge, app]
+    depends_on:
+      api: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 256m }
+
+secrets:
+  database_url: { file: ./secrets/database_url }
+  migrate_database_url: { file: ./secrets/migrate_database_url }
+  oidc_client_secret: { file: ./secrets/oidc_client_secret }
+  jwt_secret: { file: ./secrets/jwt_secret }
+  state_encryption_key: { file: ./secrets/state_encryption_key }
+  data_encryption_keys: { file: ./secrets/data_encryption_keys }
+  blind_index_key: { file: ./secrets/blind_index_key }
+  audit_hmac_key: { file: ./secrets/audit_hmac_key }
+
+volumes:
+  pgdata: {}
+
+networks:
+  edge:
+    ipam: { config: [{ subnet: 172.30.0.0/24 }] }
+  app:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.1.0/24 }] }
+  data:
+    internal: true
+    ipam: { config: [{ subnet: 172.30.2.0/24 }] }
+  egress:
+    ipam: { config: [{ subnet: 172.30.3.0/24 }] }

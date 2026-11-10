@@ -1,0 +1,99 @@
+erDiagram
+    USER ||--o{ SESSION : has
+    ASSET ||--o{ VULNERABILITY : exposes
+    CHANGE_TICKET ||--o{ VULNERABILITY : remediates
+    RISK ||--o{ RISK_ASSET : links
+    ASSET ||--o{ RISK_ASSET : links
+    RISK ||--o{ RISK_ACCEPTANCE : "accepted via"
+    KRI_DEFINITION ||--o{ KRI_BREACH : "breached by (kriKey)"
+
+    USER {
+        uuid id PK
+        string subject UK "OIDC sub"
+        string emailEnc "AES-256-GCM"
+        string emailIndex UK "HMAC blind index"
+        enum_list roles "OIDC-mapped"
+        bool active
+    }
+    SESSION {
+        uuid id PK
+        uuid familyId "rotation family"
+        string refreshHash UK "SHA-256 only"
+        string idpRefreshEnc "AES-256-GCM"
+        datetime expiresAt "idle"
+        datetime absoluteExpiresAt
+        datetime revokedAt
+    }
+    CONNECTOR {
+        uuid id PK
+        string vendor
+        enum category
+        string baseUrl
+        enum authMode
+        int pollIntervalSec
+        json settings
+        string secretEnc "AES-256-GCM, AAD=connector id"
+        enum status
+    }
+    ASSET {
+        uuid id PK
+        string hostname UK
+        int criticality "1-5"
+        bool patchCompliant
+    }
+    VULNERABILITY {
+        uuid id PK
+        string source
+        string externalId
+        string cveId
+        enum severity
+        enum status
+        datetime dueAt "SLA"
+        datetime remediatedAt
+    }
+    INCIDENT {
+        uuid id PK
+        enum severity
+        enum status
+        datetime occurredAt
+        datetime detectedAt "MTTD"
+        datetime resolvedAt "MTTR"
+        string descriptionEnc
+    }
+    THREAT_ITEM {
+        uuid id PK
+        enum type "CVE|RANSOMWARE|SUPPLY_CHAIN|ADVISORY|IOC"
+        enum severity
+        string source "attribution"
+        int impactedAssetCount
+    }
+    RISK {
+        uuid id PK
+        int likelihood "1-5"
+        int impact "1-5"
+        enum status
+    }
+    RISK_ACCEPTANCE {
+        uuid id PK
+        string justificationEnc
+        uuid requestedById
+        uuid decidedById "≠ requester (SoD)"
+        enum status
+        datetime expiresAt
+    }
+    KRI_DEFINITION {
+        string key UK
+        string metric
+        enum direction
+        float amberThreshold
+        float redThreshold
+    }
+    AUDIT_LOG {
+        bigint id PK
+        timestamptz ts
+        string action
+        string outcome
+        json details
+        string prevHash
+        string hash UK "HMAC-SHA256 chain"
+    }

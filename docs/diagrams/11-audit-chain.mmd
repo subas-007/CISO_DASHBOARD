@@ -1,0 +1,22 @@
+flowchart TD
+    subgraph Write[Append within the business transaction]
+        A[event: actor · action · target · outcome · IP · UA · details] --> B[strip credential-like keys]
+        B --> C[pg_advisory_xact_lock — serialise chain]
+        C --> D[read last hash, or genesis 000…0]
+        D --> E["hash = HMAC-SHA256(AUDIT_HMAC_KEY, prevHash | canonicalJSON(record))"]
+        E --> F[(INSERT audit_log)]
+    end
+    subgraph Protect[Protection]
+        G[trigger blocks UPDATE / DELETE / TRUNCATE for every role]
+        H[ciso_app role: INSERT + SELECT only]
+    end
+    subgraph Verify[Verification — on demand and in compliance report]
+        I[iterate by id ascending] --> J{prevHash == previous hash?}
+        J -- no --> K[[deleted / reordered record → FAIL]]
+        J -- yes --> L{recomputed HMAC == stored hash?}
+        L -- no --> M[[modified record → FAIL]]
+        L -- yes --> I
+        I -- all records checked --> N[[chain valid]]
+    end
+    F --> Protect
+    F --> Verify

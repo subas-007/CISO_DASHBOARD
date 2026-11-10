@@ -1,0 +1,44 @@
+# Testing
+
+```bash
+scripts/run-all-tests.sh          # everything, from a clean dataset (wipes volumes)
+scripts/run-all-tests.sh --keep-data
+```
+
+The script runs the following stages in order. It needs Docker, Node 22, `openssl`, and an existing `.env` and `certs/`; the setup scripts in the README create them.
+
+| Stage | Tooling | What it proves |
+|-------|---------|----------------|
+| Backend unit tests | Vitest — `backend/test` | Crypto, RBAC policy, SSRF egress rules, audit hash chain, CSV-injection guard, KPI and KRI maths, ISO 31000 banding, token signing and OIDC state, Vault and `*_FILE` secret loading |
+| Frontend build | `tsc` + Vite | Type safety; the production bundle has no inline scripts, so the strict CSP holds |
+| End-to-end suite | Playwright (Chromium) — `tests/e2e` | Real browser and API traffic through the TLS 1.3 gateway, Keycloak OIDC, mTLS to the API, and PostgreSQL |
+| Smoke test | bash + curl — `scripts/smoke-test.sh` | 52 independent HTTP-level checks, usable on servers that have no browser |
+
+## Dummy data
+
+- **Seeded demo dataset** (`SEED_DEMO_DATA=true`):
+  - 90 assets across 8 business units, about 480 vulnerabilities built from 30 real CVEs, 160 incidents over 95 days, 33 threat-intel items and 18 ISO 31000 risks.
+  - 3 risk acceptances, 14 change tickets, and 90 days of KPI history. The history is generated so that it ends at the live computed values, which keeps the trend deltas consistent.
+- **Vendor API simulator** ([`tests/vendor-sim/server.mjs`](../tests/vendor-sim/server.mjs)): a single HTTPS server that impersonates all 15 integrations on `*.sim.test`. It is reachable only from the API, on an isolated network added by [`docker-compose.test.yml`](../docker-compose.test.yml).
+  - Each vendor enforces its real authentication scheme:
+    - Splunk bearer token, Elastic `ApiKey`, QRadar `SEC` header, Tenable `X-ApiKeys`.
+    - Basic auth for Qualys, Satellite, ServiceNow, Jira and TAXII.
+    - OAuth2 client credentials for AWX, and a client certificate (mTLS) for WSUS.
+  - Each vendor returns realistic dummy payloads, including pagination (AWX), asynchronous export polling (Tenable), and XML with an entity-expansion bomb (Qualys).
+  - Every payload includes a `ZDR-CANARY` marker in fields the connectors do not normalise. The suite asserts that this marker never reaches the logs or the database.
+- **Ephemeral identities:** test users are created in Keycloak before the run and deleted afterwards. The demo accounts are never modified.
+
+## End-to-end coverage (`tests/e2e`)
+
+| Spec | Highlights |
+|------|-----------|
+| `01-auth` | OIDC login for every role, with exact role and permission sets checked against the documented policy. Cookie flags (`__Host-`, Secure, HttpOnly, SameSite=Strict, ≤10 min access token). A user with no role is denied; a wrong password is rejected. **First login forces a password change and TOTP enrolment, and a code is then required on every login** (a wrong code is rejected). Open-redirect protection, deep links, logout revoking both the server session and the IdP session, and the admin kill switch ending a live session. |
+| `02-rbac-api` | **47 endpoints × 5 roles**: each call is allowed or denied exactly as the permissions say. Denials are audited. Every endpoint rejects unauthenticated callers. Forged JWTs (edited claims, `alg: none`, garbage) are rejected. |
+| `03-pages` | **11 pages × 5 roles**: sidebar visibility, page rendering, and "Access restricted" on forbidden URLs. **Zero console errors and zero CSP violations.** Mobile layout has no horizontal overflow. Screenshots are written to `docs/screenshots/`. |
+| `04-workflows` | KPI tiles, KRI RAG statuses, charts and the 5×5 matrix. Drill-down from cell to risk to assets to vulnerabilities. A risk registered with an XSS payload renders inert. Acceptance request then CISO approval; self-approval is blocked and a second CISO can decide. Revocation re-opens the risk. Threat filters, search, the "impacting my assets" filter and triage. An incident logged by one user appears for another live over SSE. Remediation status changes and change-ticket linking (non-https URLs rejected). KRI edits with ordering validation, parameter permissions, breach acknowledgement. Audit verification, record inspection, and CSV export without formula cells. The compliance report. A connector configured end to end in the UI (test, sync, credential rotation, delete). |
+| `05-connectors` | **All 15 adapters**: create, test connection, sync, then exact normalised record counts and classification checks (incident status, CVE correlation, impacted-asset counts, patch compliance, ticket URLs, threat types). No XML entity expansion. **Zero data retention**: the canary is absent from the API logs and from a full `pg_dump`. Credentials exist only as ciphertext, and ciphertext copied to another connector will not decrypt because of the AAD binding. Safe failures for: wrong credentials, a missing client certificate, a bad OAuth2 secret, a redirect to cloud metadata, DNS that resolves into an internal zone, an unresolvable host, and a rogue CA. 20 unsafe configurations are rejected (encoded or literal loopback, link-local and internal IPs, plain HTTP, credentials in the URL, CRLF header injection, malformed PEM, unknown fields, and more). The scheduler's automatic polling and lease. Every connector change appears in the audit log, with no secrets in it. |
+| `06-resilience` | Detection of a **modified or deleted audit record** (and the chain heals once the record is restored). Triggers block UPDATE, DELETE and TRUNCATE even for the database owner. The runtime database role is limited to DML. Non-TLS database connections are refused and live sessions use TLS 1.3. Sensitive fields are ciphertext at rest and only refresh-token hashes are stored. Containers run non-root, with a read-only filesystem, all capabilities dropped and no npm. Only the gateway is published. Network zones are enforced. **The API rejects clients without a certificate, and rejects TLS 1.2, even from inside the app network.** Secrets do not appear in `docker inspect` or in `/proc/*/environ`. The gateway refuses TLS 1.2, redirects HTTP, and sends the expected headers. Malformed, oversized and over-specified requests are rejected, injection strings are inert, and errors leak no stack traces. Acceptance expiry and the KRI breach job. **AES key rotation with no data loss.** Authentication endpoints are rate-limited with 429. |
+
+Reports go to `tests/reports/`: an HTML report (`npx playwright show-report reports/html`), `results.json`, and traces for failed tests.
+
+> Note: the key-rotation test adds a `v2` key to `secrets/data_encryption_keys`. The `v1` key stays active, and `v2` is kept so that data written under it can still be decrypted.

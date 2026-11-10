@@ -1,0 +1,15 @@
+stateDiagram-v2
+    [*] --> PENDING: request (CISO / SecOps / Patch Admin)<br/>justification encrypted · validity ≤ max days
+    PENDING --> APPROVED: CISO approves<br/>approver ≠ requester (SoD)
+    PENDING --> REJECTED: CISO rejects with rationale
+    APPROVED --> EXPIRED: validity date passes<br/>(hourly job) → risk re-opens
+    APPROVED --> REVOKED: CISO revokes → risk re-opens
+    REJECTED --> [*]
+    EXPIRED --> [*]
+    REVOKED --> [*]
+    note right of APPROVED
+        Risk status = ACCEPTED.
+        Every transition is written to the
+        immutable audit log in the same
+        transaction as the change.
+    end note

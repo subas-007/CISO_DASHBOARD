@@ -1,0 +1,51 @@
+# Test overlay: adds the vendor API simulator on an isolated network reachable only by
+# the API. Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --wait
+name: ciso-dashboard
+
+services:
+  vendor-sim:
+    image: node:22-alpine
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    working_dir: /sim
+    command: ["node", "server.mjs"]
+    volumes:
+      - ./tests/vendor-sim:/sim:ro,z
+      - ./certs:/certs:ro,z
+    networks:
+      vendorsim:
+        aliases:
+          - splunk.sim.test
+          - elastic.sim.test
+          - qradar.sim.test
+          - tenable.sim.test
+          - nessus.sim.test
+          - qualys.sim.test
+          - wsus.sim.test
+          - awx.sim.test
+          - satellite.sim.test
+          - servicenow.sim.test
+          - jira.sim.test
+          - misp.sim.test
+          - taxii.sim.test
+          - intel.sim.test
+          - kev.sim.test
+          - redirect.sim.test
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('net').connect(8443,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    networks: [app, data, egress, vendorsim]
+    depends_on:
+      vendor-sim: { condition: service_healthy }
+
+networks:
+  vendorsim:
+    internal: true
+    ipam: { config: [{ subnet: 172.31.250.0/24 }] }

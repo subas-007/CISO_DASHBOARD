@@ -1,0 +1,15 @@
+flowchart TD
+    A([POST /api/auth/refresh<br/>__Host-ciso_rt cookie]) --> B[lookup by SHA-256 of token]
+    B --> C{found?}
+    C -- no --> R1[[401]]
+    C -- yes --> D{already revoked?}
+    D -- "yes, reason = ROTATED" --> E[REUSE DETECTED<br/>revoke entire token family] --> F[audit auth.refresh_token_reuse DENIED] --> R1
+    D -- "yes, other reason" --> R1
+    D -- no --> G{idle TTL, absolute TTL ok<br/>and user active?}
+    G -- no --> H[revoke EXPIRED] --> R1
+    G -- yes --> I[Continuous verification:<br/>exchange IdP refresh token]
+    I --> J{IdP accepts and user<br/>still has a mapped role?}
+    J -- no --> K[revoke IDP_REVERIFY_FAILED] --> R1
+    J -- yes --> L[update roles from IdP claims]
+    L --> M[mark old session ROTATED<br/>create new session in same family]
+    M --> N([200 + new access, refresh and CSRF cookies])

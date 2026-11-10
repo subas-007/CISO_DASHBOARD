@@ -1,0 +1,6 @@
+# Linux deployment targets (Ubuntu / RHEL): always LF, regardless of the client OS.
+* text=auto eol=lf
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.ico binary

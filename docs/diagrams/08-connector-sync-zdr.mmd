@@ -1,0 +1,20 @@
+flowchart TD
+    S([Scheduler tick every 30 s]) --> A{connector enabled<br/>and poll interval elapsed?}
+    A -- no --> S
+    A -- yes --> B{acquire DB lease<br/>UPDATE … WHERE leaseUntil expired}
+    B -- lost --> S
+    B -- won --> C[decrypt credentials in memory<br/>AES-256-GCM, AAD = connector id]
+    C --> D[Egress policy: https only · allowlist · denied hosts]
+    D --> E[Connect: DNS lookup checked at socket level<br/>blocks loopback · link-local/metadata · internal CIDRs]
+    E --> F[Auth: API key · Basic · OAuth2 client-credentials · mTLS]
+    F --> G[Fetch with timeout + response-size cap<br/>no redirects followed]
+    G --> H{HTTP ok?}
+    H -- no --> Z[status FAILED · generic error stored<br/>upstream body never echoed] --> R
+    H -- yes --> I[Parse JSON / XML<br/>XML entity expansion disabled]
+    I --> J[[ZERO DATA RETENTION<br/>raw buffer zero-filled immediately]]
+    J --> K[Normalise to canonical records<br/>incidents · vulns · patch status · changes · threats]
+    K --> L[(Upsert normalised fields only)]
+    L --> M[Recompute impacted-asset counts for CVEs]
+    M --> N[status HEALTHY · counts · publish SSE]
+    N --> R[release lease · close HTTP agent · drop references]
+    R --> S

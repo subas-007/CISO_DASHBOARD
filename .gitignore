@@ -1,0 +1,32 @@
+# Secrets & key material — never commit
+.env
+.env.*
+!.env.example
+secrets/
+certs/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Test artefacts (ephemeral identities, reports, traces)
+tests/.auth/
+tests/reports/
+test-results/
+playwright-report/
+
+# Dependencies & build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Logs & OS cruft
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

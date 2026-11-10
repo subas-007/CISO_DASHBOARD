@@ -1,0 +1,23 @@
+flowchart LR
+    subgraph People
+        CISO([CISO / Executive])
+        ADM([Administrator])
+        SEC([SecOps Analyst])
+        PAT([IT / Patch Admin])
+        AUD([Auditor])
+    end
+
+    DASH[[CISO Executive Dashboard]]
+    IDP[(Corporate IdP<br/>OIDC + MFA)]
+
+    subgraph Security_Tools["Security and IT tool estate"]
+        SIEM[SIEM<br/>Splunk · Elastic · QRadar]
+        VM[Vulnerability Mgmt<br/>Tenable · Nessus · Qualys]
+        PM[Patch Mgmt<br/>WSUS · Ansible · Satellite]
+        CM[Change Mgmt<br/>ServiceNow · Jira]
+        TI[Threat Intel<br/>MISP · TAXII · CISA KEV · commercial]
+    end
+
+    CISO & ADM & SEC & PAT & AUD -- HTTPS TLS 1.3 --> DASH
+    DASH -- OIDC Auth Code + PKCE --> IDP
+    DASH -- outbound HTTPS<br/>API key · OAuth2 · mTLS --> SIEM & VM & PM & CM & TI

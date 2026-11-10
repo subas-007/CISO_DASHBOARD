@@ -1,0 +1,34 @@
+flowchart TB
+    Browser([Browser<br/>React SPA])
+
+    subgraph EDGE["edge network — only published ports 80/443"]
+        GW["Gateway — NGINX (unprivileged, read-only FS)<br/>TLS 1.3 only · HSTS · strict CSP<br/>rate limiting · serves SPA"]
+    end
+
+    subgraph APPNET["app network (internal: true)"]
+        API["API — Node.js 22 / Express 5 / TypeScript<br/>OIDC RP · RBAC · Zod validation<br/>KPI/KRI engine · connector framework<br/>scheduler · SSE stream"]
+        KC["Keycloak 26 (OIDC IdP)<br/>MFA (TOTP) · brute-force protection<br/>password policy"]
+    end
+
+    subgraph DATANET["data network (internal: true)"]
+        PG[("PostgreSQL 17 primary<br/>TLS 1.3 · SCRAM-SHA-256<br/>append-only audit_log")]
+        PGR[("Read replicas<br/>(optional, multi-cluster)")]
+        MIG["migrate (one-shot)<br/>prisma migrate deploy + seed"]
+    end
+
+    subgraph EGRESS["egress network"]
+        EXT[[External security tool APIs]]
+    end
+
+    VAULT[("HashiCorp Vault KV v2<br/>(optional secrets provider)")]
+
+    Browser -- "HTTPS (TLS 1.3)" --> GW
+    GW -- "mTLS 1.3 (client cert)" --> API
+    GW -- "TLS 1.3 /auth/*" --> KC
+    API -- "TLS backchannel (token, JWKS, userinfo)" --> KC
+    API -- "TLS + SCRAM (ciso_app: DML only)" --> PG
+    API -.->|reads| PGR
+    KC -- "TLS verify-full" --> PG
+    MIG -- "TLS (owner role)" --> PG
+    API -- "HTTPS · SSRF-guarded · size-capped" --> EXT
+    API -.->|AppRole or token| VAULT

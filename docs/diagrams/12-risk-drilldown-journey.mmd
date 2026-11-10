@@ -1,0 +1,9 @@
+flowchart LR
+    A[Executive overview<br/>KPI tiles · KRI RAG · mini heat map] --> B[Risk Matrix page<br/>5×5 likelihood × impact]
+    B -->|click cell| C[Risks in cell<br/>title · owner · status]
+    C -->|click risk| D[Risk detail<br/>score · treatment]
+    D --> E[Linked assets<br/>criticality · patch state]
+    E --> F[Open vulnerabilities<br/>CVE · CVSS · SLA due date]
+    D --> G{role can request acceptance?}
+    G -- yes --> H[Request acceptance] --> I[CISO approval queue]
+    F --> J[Remediation page<br/>Patch Admin links change ticket]

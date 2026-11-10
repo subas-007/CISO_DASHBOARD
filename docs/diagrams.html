@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CISO Dashboard Diagrams</title>
+  <style>
+    :root { --bg:#ffffff; --fg:#0f172a; --muted:#475569; --card:#f8fafc; --border:#e2e8f0; --accent:#0369a1; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#0b1220; --fg:#e2e8f0; --muted:#94a3b8; --card:#111a2c; --border:#22304f; --accent:#38bdf8; } }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+    header { padding:24px 16px 8px; max-width:1200px; margin:0 auto; }
+    h1 { margin:0 0 4px; font-size:24px; }
+    header p { margin:0; color:var(--muted); }
+    nav { display:flex; flex-wrap:wrap; gap:8px; max-width:1200px; margin:12px auto 0; padding:0 16px; }
+    nav a { color:var(--accent); text-decoration:none; border:1px solid var(--border); border-radius:999px; padding:4px 10px; font-size:13px; }
+    main { max-width:1200px; margin:0 auto; padding:16px; }
+    section { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; margin:16px 0; overflow-x:auto; }
+    h2 { margin:0 0 12px; font-size:17px; }
+    pre.mermaid { margin:0; background:transparent; text-align:center; }
+    @media print { nav { display:none; } section { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CISO Executive Dashboard — Architecture &amp; Flow Diagrams</h1>
+    <p>Rendered from the Mermaid sources in <code>docs/diagrams/*.mmd</code>. Requires internet access to load Mermaid from jsDelivr.</p>
+  </header>
+  <nav>
+      <a href="#01-system-context">System context</a>
+      <a href="#02-deployment-network-zones">Deployment network zones</a>
+      <a href="#03-api-components">API components</a>
+      <a href="#04-data-model">Data model</a>
+      <a href="#05-oidc-sign-in">OIDC sign in</a>
+      <a href="#06-request-pipeline">Request pipeline</a>
+      <a href="#07-session-refresh-rotation">Session refresh rotation</a>
+      <a href="#08-connector-sync-zdr">Connector sync ZDR</a>
+      <a href="#09-kpi-kri-evaluation">KPI KRI evaluation</a>
+      <a href="#10-risk-acceptance-lifecycle">Risk acceptance lifecycle</a>
+      <a href="#11-audit-chain">Audit chain</a>
+      <a href="#12-risk-drilldown-journey">Risk drilldown journey</a>
+      <a href="#13-deployment-bootstrap">Deployment bootstrap</a>
+  </nav>
+  <main>
+  <section id="01-system-context">
+    <h2>System context</h2>
+    <pre class="mermaid">
+flowchart LR
+    subgraph People
+        CISO([CISO / Executive])
+        ADM([Administrator])
+        SEC([SecOps Analyst])
+        PAT([IT / Patch Admin])
+        AUD([Auditor])
+    end
+
+    DASH[[CISO Executive Dashboard]]
+    IDP[(Corporate IdP&lt;br/&gt;OIDC + MFA)]
+
+    subgraph Security_Tools["Security and IT tool estate"]
+        SIEM[SIEM&lt;br/&gt;Splunk · Elastic · QRadar]
+        VM[Vulnerability Mgmt&lt;br/&gt;Tenable · Nessus · Qualys]
+        PM[Patch Mgmt&lt;br/&gt;WSUS · Ansible · Satellite]
+        CM[Change Mgmt&lt;br/&gt;ServiceNow · Jira]
+        TI[Threat Intel&lt;br/&gt;MISP · TAXII · CISA KEV · commercial]
+    end
+
+    CISO &amp; ADM &amp; SEC &amp; PAT &amp; AUD -- HTTPS TLS 1.3 --&gt; DASH
+    DASH -- OIDC Auth Code + PKCE --&gt; IDP
+    DASH -- outbound HTTPS&lt;br/&gt;API key · OAuth2 · mTLS --&gt; SIEM &amp; VM &amp; PM &amp; CM &amp; TI
+</pre>
+  </section>
+  <section id="02-deployment-network-zones">
+    <h2>Deployment network zones</h2>
+    <pre class="mermaid">
+flowchart TB
+    Browser([Browser&lt;br/&gt;React SPA])
+
+    subgraph EDGE["edge network — only published ports 80/443"]
+        GW["Gateway — NGINX (unprivileged, read-only FS)&lt;br/&gt;TLS 1.3 only · HSTS · strict CSP&lt;br/&gt;rate limiting · serves SPA"]
+    end
+
+    subgraph APPNET["app network (internal: true)"]
+        API["API — Node.js 22 / Express 5 / TypeScript&lt;br/&gt;OIDC RP · RBAC · Zod validation&lt;br/&gt;KPI/KRI engine · connector framework&lt;br/&gt;scheduler · SSE stream"]
+        KC["Keycloak 26 (OIDC IdP)&lt;br/&gt;MFA (TOTP) · brute-force protection&lt;br/&gt;password policy"]
+    end
+
+    subgraph DATANET["data network (internal: true)"]
+        PG[("PostgreSQL 17 primary&lt;br/&gt;TLS 1.3 · SCRAM-SHA-256&lt;br/&gt;append-only audit_log")]
+        PGR[("Read replicas&lt;br/&gt;(optional, multi-cluster)")]
+        MIG["migrate (one-shot)&lt;br/&gt;prisma migrate deploy + seed"]
+    end
+
+    subgraph EGRESS["egress network"]
+        EXT[[External security tool APIs]]
+    end
+
+    VAULT[("HashiCorp Vault KV v2&lt;br/&gt;(optional secrets provider)")]
+
+    Browser -- "HTTPS (TLS 1.3)" --&gt; GW
+    GW -- "mTLS 1.3 (client cert)" --&gt; API
+    GW -- "TLS 1.3 /auth/*" --&gt; KC
+    API -- "TLS backchannel (token, JWKS, userinfo)" --&gt; KC
+    API -- "TLS + SCRAM (ciso_app: DML only)" --&gt; PG
+    API -.-&gt;|reads| PGR
+    KC -- "TLS verify-full" --&gt; PG
+    MIG -- "TLS (owner role)" --&gt; PG
+    API -- "HTTPS · SSRF-guarded · size-capped" --&gt; EXT
+    API -.-&gt;|AppRole or token| VAULT
+</pre>
+  </section>
+  <section id="03-api-components">
+    <h2>API components</h2>
+    <pre class="mermaid">
+flowchart TB
+    subgraph Pipeline["Request pipeline (app.ts)"]
+        direction LR
+        H[helmet headers&lt;br/&gt;no-store] --&gt; RL[rate limit] --&gt; CSRF[CSRF guard&lt;br/&gt;Origin + double-submit] --&gt; AUTHN[authenticate&lt;br/&gt;JWT + live session] --&gt; RBAC[requirePermission] --&gt; ZOD[Zod .strict schemas]
+    end
+
+    subgraph Modules
+        AUTH[auth&lt;br/&gt;OIDC · sessions · tokens]
+        KPI[kpi / kri&lt;br/&gt;engine · trends · breaches]
+        RISK[risk&lt;br/&gt;5×5 matrix · drill-down · acceptance]
+        THR[threats&lt;br/&gt;stream · facets · triage]
+        INC[incidents]
+        REM[remediation&lt;br/&gt;vulns · assets · change tickets]
+        INT[integrations&lt;br/&gt;connector config · test · sync]
+        ADMIN[admin&lt;br/&gt;users · settings · system]
+        AUDIT[audit&lt;br/&gt;query · verify · CSV export]
+        COMP[compliance report]
+        SSE["stream — SSE"]
+    end
+
+    subgraph Core
+        CRYPTO[crypto&lt;br/&gt;AES-256-GCM key ring&lt;br/&gt;HMAC blind index]
+        AUDSVC[audit service&lt;br/&gt;HMAC hash chain]
+        PRISMA[Prisma client&lt;br/&gt;+ read replicas]
+        EVENTS[event hub]
+        SCHED[scheduler&lt;br/&gt;connector leases · snapshots&lt;br/&gt;KRI eval · retention]
+    end
+
+    subgraph Connectors["Connector framework"]
+        REG[registry&lt;br/&gt;15 adapters]
+        HTTP[ConnectorHttpClient&lt;br/&gt;API key · Basic · OAuth2 · mTLS]
+        EGR[egress policy&lt;br/&gt;connect-time IP checks]
+        ING[ingest&lt;br/&gt;normalised upserts only]
+    end
+
+    Pipeline --&gt; Modules
+    Modules --&gt; AUDSVC &amp; PRISMA &amp; EVENTS
+    INT --&gt; REG
+    SCHED --&gt; REG
+    REG --&gt; HTTP --&gt; EGR
+    REG --&gt; ING --&gt; PRISMA
+    AUTH &amp; INT &amp; INC &amp; RISK --&gt; CRYPTO
+    SSE --&gt; EVENTS
+</pre>
+  </section>
+  <section id="04-data-model">
+    <h2>Data model</h2>
+    <pre class="mermaid">
+erDiagram
+    USER ||--o{ SESSION : has
+    ASSET ||--o{ VULNERABILITY : exposes
+    CHANGE_TICKET ||--o{ VULNERABILITY : remediates
+    RISK ||--o{ RISK_ASSET : links
+    ASSET ||--o{ RISK_ASSET : links
+    RISK ||--o{ RISK_ACCEPTANCE : "accepted via"
+    KRI_DEFINITION ||--o{ KRI_BREACH : "breached by (kriKey)"
+
+    USER {
+        uuid id PK
+        string subject UK "OIDC sub"
+        string emailEnc "AES-256-GCM"
+        string emailIndex UK "HMAC blind index"
+        enum_list roles "OIDC-mapped"
+        bool active
+    }
+    SESSION {
+        uuid id PK
+        uuid familyId "rotation family"
+        string refreshHash UK "SHA-256 only"
+        string idpRefreshEnc "AES-256-GCM"
+        datetime expiresAt "idle"
+        datetime absoluteExpiresAt
+        datetime revokedAt
+    }
+    CONNECTOR {
+        uuid id PK
+        string vendor
+        enum category
+        string baseUrl
+        enum authMode
+        int pollIntervalSec
+        json settings
+        string secretEnc "AES-256-GCM, AAD=connector id"
+        enum status
+    }
+    ASSET {
+        uuid id PK
+        string hostname UK
+        int criticality "1-5"
+        bool patchCompliant
+    }
+    VULNERABILITY {
+        uuid id PK
+        string source
+        string externalId
+        string cveId
+        enum severity
+        enum status
+        datetime dueAt "SLA"
+        datetime remediatedAt
+    }
+    INCIDENT {
+        uuid id PK
+        enum severity
+        enum status
+        datetime occurredAt
+        datetime detectedAt "MTTD"
+        datetime resolvedAt "MTTR"
+        string descriptionEnc
+    }
+    THREAT_ITEM {
+        uuid id PK
+        enum type "CVE|RANSOMWARE|SUPPLY_CHAIN|ADVISORY|IOC"
+        enum severity
+        string source "attribution"
+        int impactedAssetCount
+    }
+    RISK {
+        uuid id PK
+        int likelihood "1-5"
+        int impact "1-5"
+        enum status
+    }
+    RISK_ACCEPTANCE {
+        uuid id PK
+        string justificationEnc
+        uuid requestedById
+        uuid decidedById "≠ requester (SoD)"
+        enum status
+        datetime expiresAt
+    }
+    KRI_DEFINITION {
+        string key UK
+        string metric
+        enum direction
+        float amberThreshold
+        float redThreshold
+    }
+    AUDIT_LOG {
+        bigint id PK
+        timestamptz ts
+        string action
+        string outcome
+        json details
+        string prevHash
+        string hash UK "HMAC-SHA256 chain"
+    }
+</pre>
+  </section>
+  <section id="05-oidc-sign-in">
+    <h2>OIDC sign in</h2>
+    <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor U as User (browser)
+    participant GW as Gateway (NGINX, TLS 1.3)
+    participant API as API (mTLS)
+    participant IdP as Keycloak / corporate IdP
+    participant DB as PostgreSQL
+
+    U-&gt;&gt;GW: GET /api/auth/login
+    GW-&gt;&gt;API: forward (mTLS)
+    API-&gt;&gt;API: generate state, nonce, PKCE verifier (S256)
+    API--&gt;&gt;U: 303 → IdP authorize URL + Set-Cookie __Host-ciso_oidc (JWE-encrypted state, 10 min)
+    U-&gt;&gt;IdP: authenticate (password + TOTP MFA, brute-force lockout)
+    IdP--&gt;&gt;U: 302 → /api/auth/callback?code&amp;state
+    U-&gt;&gt;API: GET /api/auth/callback (via gateway)
+    API-&gt;&gt;API: decrypt state cookie, verify state
+    API-&gt;&gt;IdP: token exchange (code + code_verifier, client_secret_basic) over TLS backchannel
+    IdP--&gt;&gt;API: id_token, access_token, refresh_token
+    API-&gt;&gt;API: validate id_token (sig, iss, aud, exp, nonce) → map role claim → app roles
+    alt no mapped role / user disabled
+        API-&gt;&gt;DB: audit auth.login FAILURE
+        API--&gt;&gt;U: 303 /login?error=…
+    else authorised
+        API-&gt;&gt;DB: upsert user (email AES-256-GCM + blind index), create session (refresh hash only)
+        API-&gt;&gt;DB: audit auth.login SUCCESS
+        API--&gt;&gt;U: 303 returnTo + Set-Cookie __Host-ciso_at (JWT 10 min), __Host-ciso_rt, __Host-ciso_csrf
+    end
+</pre>
+  </section>
+  <section id="06-request-pipeline">
+    <h2>Request pipeline</h2>
+    <pre class="mermaid">
+flowchart TD
+    A([HTTPS request]) --&gt; B{TLS 1.3 at gateway?}
+    B -- no --&gt; X1[[handshake refused]]
+    B -- yes --&gt; C[Gateway: rate limit · body size · overwrite X-Forwarded-For]
+    C --&gt; D[mTLS hop to API&lt;br/&gt;client cert verified against internal CA]
+    D --&gt; E[Security headers · Cache-Control: no-store]
+    E --&gt; F{Unsafe method?}
+    F -- yes --&gt; G{Sec-Fetch-Site / Origin OK&lt;br/&gt;and X-CSRF-Token == cookie?}
+    G -- no --&gt; X2[[403 CSRF]]
+    G -- yes --&gt; H
+    F -- no --&gt; H{Access JWT valid?&lt;br/&gt;HS512 · iss · aud · exp}
+    H -- no --&gt; X3[[401 → client tries silent refresh]]
+    H -- yes --&gt; I{Server-side session live?&lt;br/&gt;not revoked · user active · absolute TTL}
+    I -- no --&gt; X3
+    I -- yes --&gt; J{RBAC: role grants permission?}
+    J -- no --&gt; K[audit access.denied] --&gt; X4[[403]]
+    J -- yes --&gt; L{Zod .strict validation&lt;br/&gt;types · ranges · unknown keys}
+    L -- no --&gt; X5[[400 with field paths, no values]]
+    L -- yes --&gt; M[Business logic&lt;br/&gt;Prisma parameterised queries]
+    M --&gt; N[(Transaction:&lt;br/&gt;change + audit record)]
+    N --&gt; O[Publish SSE change notification]
+    O --&gt; P([JSON response])
+</pre>
+  </section>
+  <section id="07-session-refresh-rotation">
+    <h2>Session refresh rotation</h2>
+    <pre class="mermaid">
+flowchart TD
+    A([POST /api/auth/refresh&lt;br/&gt;__Host-ciso_rt cookie]) --&gt; B[lookup by SHA-256 of token]
+    B --&gt; C{found?}
+    C -- no --&gt; R1[[401]]
+    C -- yes --&gt; D{already revoked?}
+    D -- "yes, reason = ROTATED" --&gt; E[REUSE DETECTED&lt;br/&gt;revoke entire token family] --&gt; F[audit auth.refresh_token_reuse DENIED] --&gt; R1
+    D -- "yes, other reason" --&gt; R1
+    D -- no --&gt; G{idle TTL, absolute TTL ok&lt;br/&gt;and user active?}
+    G -- no --&gt; H[revoke EXPIRED] --&gt; R1
+    G -- yes --&gt; I[Continuous verification:&lt;br/&gt;exchange IdP refresh token]
+    I --&gt; J{IdP accepts and user&lt;br/&gt;still has a mapped role?}
+    J -- no --&gt; K[revoke IDP_REVERIFY_FAILED] --&gt; R1
+    J -- yes --&gt; L[update roles from IdP claims]
+    L --&gt; M[mark old session ROTATED&lt;br/&gt;create new session in same family]
+    M --&gt; N([200 + new access, refresh and CSRF cookies])
+</pre>
+  </section>
+  <section id="08-connector-sync-zdr">
+    <h2>Connector sync ZDR</h2>
+    <pre class="mermaid">
+flowchart TD
+    S([Scheduler tick every 30 s]) --&gt; A{connector enabled&lt;br/&gt;and poll interval elapsed?}
+    A -- no --&gt; S
+    A -- yes --&gt; B{acquire DB lease&lt;br/&gt;UPDATE … WHERE leaseUntil expired}
+    B -- lost --&gt; S
+    B -- won --&gt; C[decrypt credentials in memory&lt;br/&gt;AES-256-GCM, AAD = connector id]
+    C --&gt; D[Egress policy: https only · allowlist · denied hosts]
+    D --&gt; E[Connect: DNS lookup checked at socket level&lt;br/&gt;blocks loopback · link-local/metadata · internal CIDRs]
+    E --&gt; F[Auth: API key · Basic · OAuth2 client-credentials · mTLS]
+    F --&gt; G[Fetch with timeout + response-size cap&lt;br/&gt;no redirects followed]
+    G --&gt; H{HTTP ok?}
+    H -- no --&gt; Z[status FAILED · generic error stored&lt;br/&gt;upstream body never echoed] --&gt; R
+    H -- yes --&gt; I[Parse JSON / XML&lt;br/&gt;XML entity expansion disabled]
+    I --&gt; J[[ZERO DATA RETENTION&lt;br/&gt;raw buffer zero-filled immediately]]
+    J --&gt; K[Normalise to canonical records&lt;br/&gt;incidents · vulns · patch status · changes · threats]
+    K --&gt; L[(Upsert normalised fields only)]
+    L --&gt; M[Recompute impacted-asset counts for CVEs]
+    M --&gt; N[status HEALTHY · counts · publish SSE]
+    N --&gt; R[release lease · close HTTP agent · drop references]
+    R --&gt; S
+</pre>
+  </section>
+  <section id="09-kpi-kri-evaluation">
+    <h2>KPI KRI evaluation</h2>
+    <pre class="mermaid">
+flowchart LR
+    subgraph Every_15_min[Every 15 min]
+        A[compute KPIs] --&gt; B[(metric_snapshots)]
+    end
+    subgraph Every_5_min[Every 5 min]
+        C[compute KPIs] --&gt; D[load KRI definitions&lt;br/&gt;thresholds = risk appetite]
+        D --&gt; E{for each enabled KRI:&lt;br/&gt;value vs amber / red}
+        E -- GREEN --&gt; F[no action]
+        E -- AMBER/RED --&gt; G{open unacknowledged breach&lt;br/&gt;at same or higher level?}
+        G -- yes --&gt; F
+        G -- "no, or AMBER→RED escalation" --&gt; H[(kri_breaches)] --&gt; I[SSE: kri] --&gt; J[Dashboard RAG updates live]
+    end
+    K[CISO / Admin edits threshold] --&gt; L{red/amber ordering valid&lt;br/&gt;for direction?}
+    L -- no --&gt; M[[400]]
+    L -- yes --&gt; N[(update + audit before/after)] --&gt; I
+</pre>
+  </section>
+  <section id="10-risk-acceptance-lifecycle">
+    <h2>Risk acceptance lifecycle</h2>
+    <pre class="mermaid">
+stateDiagram-v2
+    [*] --&gt; PENDING: request (CISO / SecOps / Patch Admin)&lt;br/&gt;justification encrypted · validity ≤ max days
+    PENDING --&gt; APPROVED: CISO approves&lt;br/&gt;approver ≠ requester (SoD)
+    PENDING --&gt; REJECTED: CISO rejects with rationale
+    APPROVED --&gt; EXPIRED: validity date passes&lt;br/&gt;(hourly job) → risk re-opens
+    APPROVED --&gt; REVOKED: CISO revokes → risk re-opens
+    REJECTED --&gt; [*]
+    EXPIRED --&gt; [*]
+    REVOKED --&gt; [*]
+    note right of APPROVED
+        Risk status = ACCEPTED.
+        Every transition is written to the
+        immutable audit log in the same
+        transaction as the change.
+    end note
+</pre>
+  </section>
+  <section id="11-audit-chain">
+    <h2>Audit chain</h2>
+    <pre class="mermaid">
+flowchart TD
+    subgraph Write[Append within the business transaction]
+        A[event: actor · action · target · outcome · IP · UA · details] --&gt; B[strip credential-like keys]
+        B --&gt; C[pg_advisory_xact_lock — serialise chain]
+        C --&gt; D[read last hash, or genesis 000…0]
+        D --&gt; E["hash = HMAC-SHA256(AUDIT_HMAC_KEY, prevHash | canonicalJSON(record))"]
+        E --&gt; F[(INSERT audit_log)]
+    end
+    subgraph Protect[Protection]
+        G[trigger blocks UPDATE / DELETE / TRUNCATE for every role]
+        H[ciso_app role: INSERT + SELECT only]
+    end
+    subgraph Verify[Verification — on demand and in compliance report]
+        I[iterate by id ascending] --&gt; J{prevHash == previous hash?}
+        J -- no --&gt; K[[deleted / reordered record → FAIL]]
+        J -- yes --&gt; L{recomputed HMAC == stored hash?}
+        L -- no --&gt; M[[modified record → FAIL]]
+        L -- yes --&gt; I
+        I -- all records checked --&gt; N[[chain valid]]
+    end
+    F --&gt; Protect
+    F --&gt; Verify
+</pre>
+  </section>
+  <section id="12-risk-drilldown-journey">
+    <h2>Risk drilldown journey</h2>
+    <pre class="mermaid">
+flowchart LR
+    A[Executive overview&lt;br/&gt;KPI tiles · KRI RAG · mini heat map] --&gt; B[Risk Matrix page&lt;br/&gt;5×5 likelihood × impact]
+    B --&gt;|click cell| C[Risks in cell&lt;br/&gt;title · owner · status]
+    C --&gt;|click risk| D[Risk detail&lt;br/&gt;score · treatment]
+    D --&gt; E[Linked assets&lt;br/&gt;criticality · patch state]
+    E --&gt; F[Open vulnerabilities&lt;br/&gt;CVE · CVSS · SLA due date]
+    D --&gt; G{role can request acceptance?}
+    G -- yes --&gt; H[Request acceptance] --&gt; I[CISO approval queue]
+    F --&gt; J[Remediation page&lt;br/&gt;Patch Admin links change ticket]
+</pre>
+  </section>
+  <section id="13-deployment-bootstrap">
+    <h2>Deployment bootstrap</h2>
+    <pre class="mermaid">
+flowchart TD
+    A[Ubuntu / RHEL VM&lt;br/&gt;Docker Engine or Podman + compose] --&gt; B[scripts/generate-certs.sh host&lt;br/&gt;internal CA + service cert]
+    B --&gt; C[scripts/generate-secrets.sh&lt;br/&gt;.env + secrets/ — mode 600, git-ignored]
+    C --&gt; D[docker compose up -d --build]
+    D --&gt; E[postgres: TLS entrypoint · SCRAM · init roles]
+    E --&gt; F[migrate: prisma migrate deploy&lt;br/&gt;+ triggers, grants · seed]
+    E --&gt; G[keycloak: realm import&lt;br/&gt;roles · client · demo users w/ forced TOTP]
+    F --&gt; H[api: healthy over mTLS]
+    G --&gt; H
+    H --&gt; I[gateway: TLS 1.3 on :443]
+    I --&gt; J[scripts/smoke-test.sh&lt;br/&gt;52 end-to-end checks]
+</pre>
+  </section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({ startOnLoad: true, securityLevel: "strict", theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default", flowchart: { htmlLabels: true, curve: "basis" } });
+  </script>
+</body>
+</html>
